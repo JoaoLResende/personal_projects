@@ -1,0 +1,4 @@
+if(round(resposta[i] - resposta[i-1],3) = 0){
+  
+  return(paste0("Função terminou após ", "i", " interações, com o valor de ", "valor_atual" ))
+}

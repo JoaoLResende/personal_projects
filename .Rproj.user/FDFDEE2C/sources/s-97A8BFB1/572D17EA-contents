@@ -1,0 +1,5070 @@
+library(shiny)
+library(shinydashboard)
+library(tidyverse)
+library(DT)
+library(formattable)
+library(googlesheets4)
+library(googledrive)
+library(lubridate)
+library(janitor)
+
+
+# library(here)
+# setwd(here()) # Estabelecer local de workspace
+
+
+# source(file.path(getwd(), 'Functions/manipular_geral.R'), encoding = 'UTF-8', echo = TRUE, local = FALSE)
+
+email <- 'compras@aedasmg-itatiaiucu.org'
+primeira_vez_a_rodar <- FALSE
+
+
+#source(file.path(getwd(), 'Functions/manipular_geral.R'), encoding = 'UTF-8', echo = TRUE, local = FALSE)
+
+#authorização
+autorizar <- function(rodar_local = FALSE, primeira_vez = FALSE){
+  if(is.character(rodar_local)){
+    assign("usuario_logado", rodar_local, envir = .GlobalEnv)
+    assign("gerar_antes", TRUE, envir = .GlobalEnv)
+  } #else {
+    #assign("gerar_antes", FALSE, envir = .GlobalEnv)
+    #assign("usuario_logado", session_user, envir = .GlobalEnv)
+  #}
+
+  email_shiny <- drive_matriz_id[rodar_local][[1]][2]
+
+  if(primeira_vez){
+    gs4_auth(cache = ".secrets") #for the first time running the app in R to get the OAuth token
+    drive_auth(cache = ".secrets") #for the first time running the app in R to get the OAuth token
+  }
+  gs4_auth(cache = ".secrets", email = email_shiny, use_oob = TRUE)
+  drive_auth(cache = ".secrets", email = email_shiny, use_oob = TRUE)
+
+}
+
+'%ni%'  <- Negate('%in%')
+
+drive_matriz_id_update <- function(){
+  #tabela_mor <- as_id("1o3bQbxp_aUok3LMaqt-Wz0JFblgsmIafzEgIi9UlwlE")
+  #drive_id <- with(read_sheet(tabela_mor), split(as_id(id), email))
+  tabela_mor <- file.path("./assets/2021-08-23-Chaves de advgs - Sheet 1.csv")
+  drive_id <- with(read.csv(tabela_mor, stringsAsFactors = FALSE), split(c(as_id(id),shiny), email))
+  assign("drive_matriz_id", drive_id, envir = .GlobalEnv)
+}
+
+
+escolher_dados <- function(pessoa, arquivo, item){
+  if(!exists("pasta_da_pessoa_identificada")){
+    pasta_da_pessoa_identificada <- as_id(drive_matriz_id[as.character(pessoa)][[1]][1])
+    assign("pasta_da_pessoa_identificada", as_id(pasta_da_pessoa_identificada), envir = .GlobalEnv)
+    id_do_item_terreno <- pasta_da_pessoa_identificada %>%
+        drive_ls("dados_terreno") %>%
+        arrange(desc(name)) %>%
+        slice_head() %>%
+        select(id) %>%
+        unlist(use.names = FALSE) %>%
+        as_id()
+      assign("id_dados_terreno", id_do_item_terreno, envir = .GlobalEnv)
+
+      id_do_item_individuo <- pasta_da_pessoa_identificada %>%
+        drive_ls("dados_individuo") %>%
+        arrange(desc(name)) %>%
+        slice_head() %>%
+        select(id) %>%
+        unlist(use.names = FALSE) %>%
+        as_id()
+      assign("id_dados_individuo", id_do_item_individuo, envir = .GlobalEnv)
+
+  }
+
+  id_do_item <- pasta_da_pessoa_identificada %>%
+    drive_ls(arquivo) %>%
+    arrange(desc(name)) %>%
+    slice_head() %>%
+    select(id) %>%
+    unlist(use.names = FALSE) %>%
+    as_id()
+  if(item == 'matriz_de_danos_morais_tomad'){
+    itemm <- "matriz_de_danos_morais_tomada_de_termo"
+    assign(itemm, read_sheet(id_do_item, sheet = item), envir = .GlobalEnv)
+    return()
+  }
+  assign(item, read_sheet(id_do_item, sheet = item), envir = .GlobalEnv)
+}
+
+dados_terreno <- list(
+  'arquitetura'
+  ,'agrarias'
+  ,'objetos'
+  ,'roca'
+  ,'consorcio'
+  ,'terrenos'
+  ,'imoveis'
+  ,'privacao_de_uso'
+)
+
+dados_individuo <- list(
+  'base'
+  ,'ref_danos_morais'
+  ,'ref_tomada_de_termo'
+  ,'ref_cadastro'
+  ,'ref_renda'
+  ,'renda'
+  ,'renda_divida_anterior'
+  ,'renda_aumento_divida'
+  ,'danos_morais'
+  ,'datas_acionamento_acordo'
+  ,'desconto'
+)
+
+gerar_todos_os_dados <- function(usuario_logado){
+
+  for(aba in dados_terreno){
+    escolher_dados(usuario_logado, "dados_terreno", aba)
+  }
+  for(aba in dados_individuo){
+    escolher_dados(usuario_logado, "dados_individuo", aba)
+  }
+
+  # mes_ano_ipca_e_2ptc_aa <- read_sheet("https://docs.google.com/spreadsheets/d/12sbQcYDFbMCT9XcytR9JqT6EVK9ML7zDOStcFxiy_aE/edit#gid=684842913", range = "Cálculos e parâmetros agro!B18:C90") %>%
+  #   rename("data" = "Mês e ano", "valor" = "IPCA + 2% a.a.")
+
+  mes_ano_ipca_e_2ptc_aa <- read_sheet("https://docs.google.com/spreadsheets/d/1wpFHUUBBmODQz3NBd4g7qRDrk5ahMy5o77t_4FSeqdk/edit#gid=1128967963", range = "tabela!B6:C150", col_types = "Dd") %>%
+    rename("data" = "Mês e ano", "valor" = "IPCA + 2% a.a.")
+
+  assign("mes_ano_ipca_e_2ptc_aa", mes_ano_ipca_e_2ptc_aa, envir = .GlobalEnv)
+
+}
+
+numero <- function(x){
+    return(as.numeric(gsub(",", ".", x)))
+}
+
+
+plus <- function(x) {
+    if(all(is.na(x))){
+        c(x[0],NA)} else {
+            sum(x,na.rm = TRUE)}
+}
+
+funcao_de_retorno <- function(vetor, tipo = "ipca"){
+  switch(tipo,
+         "ipca" = for(indice in 2:length(vetor)){
+           vetor[indice] <- vetor[indice] + (vetor[indice] * vetor[indice-1])
+         },
+         "parcela_atualizada" = for(indice in 2:length(vetor)){
+           vetor[indice] <- (vetor[indice] * vetor[indice-1])
+         },
+         "valor_presente" = for(indice in 2:length(vetor)){
+           vetor[indice] <- (vetor[indice] + vetor[indice-1])
+         }
+  )
+  return(vetor)
+}
+
+retornar_ipca_acumulado_mensal_com_correcao <- function(data_inicial, sem_acumulo = FALSE){
+  data_inicial <- as.Date(data_inicial)
+  dados_finais <- mes_ano_ipca_e_2ptc_aa %>%
+    filter(data >= data_inicial) %>%
+    mutate(valor = 1 + valor)
+
+  if(!sem_acumulo){
+    dados_finais <- dados_finais%>%
+      mutate(valor = funcao_de_retorno(valor)) %>%
+      rename(ipca_acumulado_corrigido = valor)
+  }
+
+  return(dados_finais)
+}
+
+retornar_parcela_atualizada <- function(data_inicial){
+  data_inicial <- as.Date(data_inicial)
+  dados_finais <- mes_ano_ipca_e_2ptc_aa %>%
+    filter(data >= data_inicial) %>%
+    mutate(valor = 1 + valor)
+  dados_finais[1,2] <- 1
+  dados_finais <- dados_finais %>%
+    mutate(valor = funcao_de_retorno(valor, "parcela_atualizada")) %>%
+    rename(parcela_atualizada = valor)
+
+  return(dados_finais)
+}
+
+retornar_valor_presente <- function(data_de_acionamento, data_de_pagamento){
+  data_de_acionamento <- as.Date(data_de_acionamento)
+  data_de_pagamento <- as.Date(data_de_pagamento)
+  mes_anterior_a_data_de_acionamento <- data_de_acionamento  %m-% months(1)
+  mes_de_pagamento <-  floor_date(data_de_pagamento, 'month')
+  mes_posterior_a_data_de_pagamento <- mes_de_pagamento  %m+% months(1)
+
+  if(data_de_acionamento == floor_date(data_de_acionamento, 'month')){
+
+  }
+
+  parcela_atualizada_utilizada <- retornar_parcela_atualizada(mes_anterior_a_data_de_acionamento) %>%
+    filter(data == mes_de_pagamento) %>%
+    select(2) %>%
+    unlist(use.names = FALSE)
+
+  parcela_dividido_por_ipca_mais_um <- retornar_ipca_acumulado_mensal_com_correcao(data_de_acionamento, sem_acumulo = TRUE) %>%
+    filter(data >= mes_posterior_a_data_de_pagamento) %>%
+    mutate(valor_presente = parcela_atualizada_utilizada/valor)
+  parcela_dividido_por_ipca_mais_um[1,3] <- parcela_atualizada_utilizada
+  parcela_dividido_por_ipca_mais_um <- parcela_dividido_por_ipca_mais_um %>%
+    mutate(valor_presente = funcao_de_retorno(valor_presente, tipo = "valor_presente")) %>%
+    select(1,3)
+
+  return(parcela_dividido_por_ipca_mais_um)
+}
+
+retornar_tabela_completa <- function(data_de_acionamento, data_de_pagamento){
+  valor_futuro <- retornar_ipca_acumulado_mensal_com_correcao(data_de_acionamento) %>%
+    filter(data >= floor_date(as.Date(data_de_pagamento), "month"))
+  valor_presente <- retornar_valor_presente(data_de_acionamento, data_de_pagamento)
+  dados <- valor_futuro %>%
+    left_join(valor_presente, by=c("data"))
+  return(dados)
+}
+
+salvar_tabela <- function(tbl_editada, tbl_original, aba){
+  #browser()
+  resultados <- c(
+    'final_renda_indv'
+    ,'final_renda_total'
+    ,'final_morais_indv'
+    ,'final_resultado'
+
+  )
+  if(aba %in% resultados){
+
+    if(aba != 'final_morais_indv'){
+      tabela_resultado <- tbl_editada$x$data %>%
+        as.data.frame() %>%
+        mutate(atualizado_em = Sys.time())
+    } else {
+      tabela_resultado <- tbl_editada %>%
+        mutate(atualizado_em = Sys.time())
+    }
+
+    if(aba %in% sheet_names(id_dados_individuo)){
+      sheet_append(id_dados_individuo, tabela_resultado, aba)
+
+    } else {
+      sheet_add(id_dados_individuo, aba)
+      sheet_write(tabela_resultado, id_dados_individuo, aba)
+    }
+  } else {
+    if(aba %in% dados_terreno){fonte <- id_dados_terreno}
+    if(aba %in% dados_individuo){fonte <- id_dados_individuo}
+    chaves_alteradas <- tbl_editada %>%
+      select(primary_key) %>%
+      unlist(use.names = FALSE)
+    nova_tabela <- tbl_original %>%
+      filter(primary_key %ni% chaves_alteradas) %>%
+      rbind.data.frame(tbl_editada %>%
+              relocate(tbl_original %>% names()) %>%
+                filter(!is.na(primary_key),
+                       primary_key != "Editável")
+              )
+    write_sheet(nova_tabela, fonte, aba)
+  }
+
+  observe({
+    showModal(modalDialog(title = "Em processo....",
+                          "ARQUIVO SALVO",
+                          easyClose = TRUE,
+                          footer = NULL
+    ))
+  })
+
+}
+
+
+
+ui <- dashboardPage(dashboardHeader(title = "Automatização Matriz de Danos"),
+
+                    dashboardSidebar(
+
+                        sidebarMenu(
+
+                          textOutput("usuario"),
+
+                          menuItem(tabName = "Filtro", selectInput(
+                            "v_NF",
+                            "NF",
+                            choices = c("Todos"),
+                            selected = "Todos"
+                          ))
+                             ,
+                            menuItem(
+                                "Dados_Gerais",
+                                tabName = "Dados_Gerais",
+                                icon = icon("dashboard"))
+                            ,
+
+
+                            menuItem(
+                                "Arquitetura",
+                                tabName = "Arquitetura",
+                                icon = icon("dashboard"))
+
+                            ,
+
+                            menuItem(
+                                "Agrarias",
+                                tabName = "Agrarias",
+                                icon = icon("dashboard"))
+                            ,
+
+
+                            menuItem(
+                              "Danos_morais",
+                              tabName = "Danos_Morais",
+                              icon = icon("dashboard"))
+                            ,
+
+                            menuItem(
+                              "Danos_renda",
+                              tabName = "Danos_renda",
+                              icon = icon("dashboard"))
+                          ,
+
+                          menuItem(
+                            "Fora_Matriz",
+                            tabName = "Fora_Matriz",
+                            icon = icon("dashboard"))
+                          ,
+
+                          menuItem(
+                            "Total",
+                            tabName = "Total",
+                            icon = icon("dashboard"))
+
+
+                          ,
+
+                          fluidRow(
+                            column(1
+                                   ,infoBoxOutput("valor_presente")
+                                   ,infoBoxOutput("valor_futuro")
+                                   )
+                          )
+
+                        )
+                    )
+
+                    ,
+                    dashboardBody(tabItems(
+                        tabItem(tabName = "Dados_Gerais",
+                                fluidRow(infoBoxOutput("NF"),
+                                         infoBoxOutput("Referencia")),
+                                fluidRow(infoBoxOutput("Endereco"),
+                                         infoBoxOutput("Telefone_1")),
+                                fluidRow(infoBoxOutput("Telefone_2"),
+                                         infoBoxOutput("Telefone_3")),
+                                fluidRow(box(DTOutput("Dados_Gerais"), width = 11)))
+                        ,
+
+                        tabItem(tabName = "Arquitetura",
+                                fluidRow(infoBoxOutput("terra_nua_box")),
+                                fluidRow(box(DTOutput("ex_df2"), width = 11, title = "Terra Nua"),
+                                         actionButton("saveBtn_ex_df2","Salvar")),
+                                fluidRow(infoBoxOutput("imoveis_moradia")),
+                                fluidRow(box(DT::dataTableOutput("ex_df3"), width = 11, title = "Construções de Moradia"),
+                                         actionButton("saveBtn_ex_df3","Salvar")),
+                                fluidRow(infoBoxOutput("imoveis_lazer")),
+                                fluidRow(box(DTOutput("ex_df4"), width = 11, title = "Construções Voltadas para o Lazer"),
+                                         actionButton("saveBtn_ex_df4","Salvar")),
+                                fluidRow(infoBoxOutput("imoveis_animais")),
+                                fluidRow(box(DTOutput("ex_df5"), width = 11, title = "Construções Voltadas Criação de Animais"),
+                                         actionButton("saveBtn_ex_df5","Salvar")),
+                                fluidRow(infoBoxOutput("imoveis_cotidiano")),
+                                fluidRow(box(DTOutput("ex_df6"), width = 11, title = "Construções do Cotidiano"),
+                                         actionButton("saveBtn_ex_df6","Salvar")),
+                                fluidRow(infoBoxOutput("imoveis_religioso")),
+                                fluidRow(box(DTOutput("ex_df7"), width = 11, title = "Construções Religioso/Comércio") ,
+                                         actionButton("saveBtn_ex_df7","Salvar")),
+                                fluidRow(infoBoxOutput("imoveis_benfeitorias")),
+                                fluidRow(box(DTOutput("ex_df8"), width = 11, title = "Benfeitorias"),
+                                         actionButton("saveBtn_ex_df8","Salvar")),
+                                fluidRow(infoBoxOutput("objetos")),
+                                fluidRow(box(DTOutput("ex_df9"), width = 11),
+                                         actionButton("saveBtn_ex_df9","Salvar"), title = "Objetos"),
+                                fluidRow(box(selectInput("data_evacuacao", label = "Data da Evacuação", choices = c("8/2/2019", "11/7/2019", "1/4/2020"), selected = "8/2/2019")),
+                                         infoBoxOutput("meses_pivacao")),
+                                fluidRow(box(DTOutput("ex_df60"), width = 11, title = "Privação de Uso"),
+                                         actionButton("saveBtn_ex_df60","Salvar")),
+                                fluidRow(box(DTOutput("ex_df61"), width = 11, title ="Auxiliar para Privação de uso" ))
+
+
+
+                        )
+                        ,
+
+                        tabItem(tabName = "Agrarias",
+                                fluidRow(infoBoxOutput("horta")),
+
+                                fluidRow(box(DTOutput("ex_df010"), width = 11, title = "Horta (editável)"),
+                                         actionButton("saveBtn_ex_df010","Salvar")),
+                                fluidRow(box(DTOutput("ex_df10"), width = 11, title = "Horta Resultado")),
+
+                                fluidRow(infoBoxOutput("frutiferas")),
+                                fluidRow(box(DTOutput("ex_df11"), width = 11, title = "Frutiferas"),
+                                         actionButton("saveBtn_ex_df11","Salvar")),
+
+                                fluidRow(infoBoxOutput("ornamentais")),
+                                fluidRow(box(DTOutput("ex_df12"), width = 11, title = "Ornamentais"),
+                                         actionButton("saveBtn_ex_df12","Salvar")),
+
+                                fluidRow(infoBoxOutput("roca")),
+                                fluidRow(box(DTOutput("ex_df13"), width = 11, title = "Roça"),
+                                         actionButton("saveBtn_ex_df13","Salvar")),
+
+                                fluidRow(infoBoxOutput("pastagem")),
+                                fluidRow(box(DTOutput("ex_df14"), width = 11, title = "Pastagem"),
+                                         actionButton("saveBtn_ex_df14","Salvar")),
+
+                                fluidRow(infoBoxOutput("forrageira")),
+                                fluidRow(box(DTOutput("ex_df014"), width = 11, title = "Forrageira"),
+                                         actionButton("saveBtn_ex_df014","Salvar")),
+
+
+
+                                fluidRow(infoBoxOutput("consorcio")),
+                                fluidRow(box(DTOutput("ex_df21"), width = 11, title = "Consorcio"),
+                                         actionButton("saveBtn_ex_df21","Salvar")),
+
+                                fluidRow(infoBoxOutput("pecuaria")),
+                                fluidRow(box(DTOutput("ex_df15"), width = 11, title = "Pecuaria"),
+                                         actionButton("saveBtn_ex_df15","Salvar")),
+
+                                fluidRow(infoBoxOutput("aquicultura")),
+                                fluidRow(box(DTOutput("ex_df16"), width = 11, title = "Aquicultura"),
+                                         actionButton("saveBtn_ex_df16","Salvar")),
+
+                                fluidRow(infoBoxOutput("avicultura")),
+                                fluidRow(box(DTOutput("ex_df17"), width = 11, title = "Avicultura"),
+                                         actionButton("saveBtn_ex_df17","Salvar")),
+
+                                fluidRow(infoBoxOutput("apicultura")),
+                                fluidRow(box(DTOutput("ex_df18"), width = 11, title = "Apicultura"),
+                                         actionButton("saveBtn_ex_df18","Salvar")),
+
+                                fluidRow(infoBoxOutput("insumos_animais")),
+                                fluidRow(box(DTOutput("ex_df19"), width = 11, title = "Insumo Animal"),
+                                         actionButton("saveBtn_ex_df19","Salvar")),
+                                fluidRow(infoBoxOutput("producao_animal")),
+                                fluidRow(box(DTOutput("ex_df20"), width = 11, title = "Produção Animal")
+                                         ,actionButton("saveBtn_ex_df20","Salvar")
+                                         )
+
+
+                        )
+
+
+                       ,
+
+                       tabItem(tabName = "Danos_Morais",
+                               fluidRow(box(DTOutput("ex_df22"), width = 11, title = "Danos Morais"),
+                                        actionButton("saveBtn_ex_df22","Salvar")),
+                               fluidRow(box(DTOutput("Danos_Morais_tomada_de_termo"), width = 11),
+                                        actionButton("saveBtn_Danos_Morais_tomada_de_termo","Salvar")),
+                               fluidRow(box(DTOutput("Danos_Morais_cadastro"), width = 11),
+                                        actionButton("saveBtn_Danos_Morais_cadastro","Salvar"))
+                       )
+
+                       ,
+
+                       tabItem(tabName = "Danos_renda",
+                               fluidRow(box(DTOutput("ex_df26"), width = 11, title = "Danos de Renda (editável)"),
+                                        actionButton("saveBtn_ex_df26","Salvar")),
+                               fluidRow(box(DTOutput("renda_pessoa_fisica"), title = "Resultado Danos a Renda PF")),
+                               fluidRow(box(DTOutput("ex_df40"), width = 11, title = "Perda de Estoques (editável)"),
+                                        actionButton("saveBtn_ex_df40","Salvar")),
+                               fluidRow(box(DTOutput("infraestrutura"), width = 11, title = "Perda de Estoques Resultado")),
+                               fluidRow(box(DTOutput("ex_df41"), width = 11, title = "Contribuição Trabalhista (editável)"),
+                                        actionButton("saveBtn_ex_df41","Salvar")),
+                               fluidRow(box(DTOutput("trabalho"), title = "Contribuição Trabalhista Resultado", width = 11)),
+                               fluidRow(box(DTOutput("ex_df42"), title = "Danos ao Trabalho (editável)", width = 11),
+                                        actionButton("saveBtn_ex_df42","Salvar")),
+                               fluidRow(box(DTOutput("ex_df026"), title = "Custos Processuais (editável)", width = 11),
+                                        actionButton("saveBtn_ex_df026","Salvar")),
+                              fluidRow(box(DTOutput("autonomo"), title = "Resultado Danos ao Trabalho", width = 11)),
+                               fluidRow(box(DTOutput("ex_df28"), width = 11, title = "Danos ao aumento de despesas (editável)"),
+                                        actionButton("saveBtn_ex_df28","Salvar")),
+                               fluidRow(box(DTOutput("ex_df30"), width = 11, title = "Resultado Danos ao aumento de despesas")),
+                               fluidRow(box(DTOutput("ex_df43"), title = "Renda Individual PJ (editável)", width = 11)),
+                               fluidRow(box(DTOutput("renda_pessoa_juridica"), title = "Renda Individual PJ Resultado", width = 11),
+                                        actionButton("saveBtn_ex_df43","Salvar")),
+                               # fluidRow(box(DTOutput("lucro_pj"))),
+                               fluidRow(box(DTOutput("ex_df44"), width = 11, title = "Mudança (editável)"),
+                                        actionButton("saveBtn_ex_df44","Salvar")),
+                               fluidRow(box(DTOutput("ex_df044"), width = 11, title = "Reforma do imóvel comercial (editável)"),
+                                       actionButton("saveBtn_ex_df044","Salvar")),
+                               fluidRow(box(DTOutput("realocacao"), title = "Realocação PJ Resultado", width = 11)),
+                               fluidRow(box(DTOutput("ex_df45"), title = "Infraestrutura e estoque PJ (editável)", width = 11)),
+                                        actionButton("saveBtn_ex_df45","Salvar"),
+                               fluidRow(box(DTOutput("infra_estoque_pj"), title = "Infraestrutura e estoque PJ Resultado", width = 11)),
+                               fluidRow(box(DTOutput("ex_df46"), width = 11, title = "Custos burocráticos ocorridos devido o acionamento do PAEBM (editável)"),
+                                        actionButton("saveBtn_ex_df46","Salvar")),
+                               fluidRow(box(DTOutput("ex_df47"), title = "Divida Trabalhista (editável)", width = 11)),
+                               fluidRow(box(DTOutput("divida_trabalhista"), title = "Divida Trabalhista Resultado", width = 11),
+                                        actionButton("saveBtn_ex_df47","Salvar")),
+                               fluidRow(box(DTOutput("ex_df48"), title = "Dividas a partir PAEBM (editável)", width = 11),
+                                        actionButton("saveBtn_ex_df48","Salvar")),
+                              fluidRow(box(DTOutput("divida_antes_pf"), title = "Dividas a partir PAEBM Resultado", width = 11)),
+                              fluidRow(box(DTOutput("ex_df050"), width = 11, title = "Dívidas anteriores ao PAEBM (editável)"),
+                                       actionButton("saveBtn_ex_df050","Salvar")),
+                               fluidRow(box(DTOutput("divida_antes_pj"), title = "Dividas a partir PAEBM Resultado", width = 11)),
+
+                               fluidRow(box(DTOutput("ex_df49"), width = 11), title = "Dívidas anteriores ao PAEBM (editável)",
+                                        # box(DTOutput("divida_antes_pj")),
+                                        actionButton("saveBtn_ex_df49","Salvar")),
+
+                               fluidRow(box(DTOutput("ex_df50"), width = 11, title = "Dívidas anteriores ao PAEBM - outra natureza (editável)"),
+                                        # box(DTOutput("divida_antes_pj")),
+                                        actionButton("saveBtn_ex_df50","Salvar")),
+                               fluidRow(box(DTOutput("Danos_renda_cadastro"), width = 11))
+
+
+                       ),
+
+                       tabItem(tabName = "Fora_Matriz",
+                               fluidRow(infoBoxOutput("total_objetos_fora")),
+                               titlePanel("Objetos Fora"),
+                               fluidRow(box(DTOutput("ex_df23"), width = 11),
+                                        actionButton("saveBtn_ex_df23","Salvar")),
+                               fluidRow(infoBoxOutput("agrarias_outros")),
+                               titlePanel("Agrarias Fora"),
+                               fluidRow(box(DTOutput("ex_df24"), width = 11),
+                                        actionButton("saveBtn_ex_df24","Salvar")),
+                               fluidRow(infoBoxOutput("imoveis_outros")),
+                               titlePanel("Arquitetura Fora"),
+                               fluidRow(box(DTOutput("ex_df25"), width = 11),
+                                        actionButton("saveBtn_ex_df25","Salvar"))
+                               ),
+
+
+                       tabItem(tabName = "Total",
+                               fluidRow(box(DTOutput("ex_df54"), width = 11, title = "Tabela de Correção monetária")
+                                        ,actionButton("saveBtn_ex_df54","Salvar")),
+                               fluidRow(box(DTOutput("ex_df55"), width = 11, title = "Descontos")
+                                        ,actionButton("saveBtn_ex_df55","Salvar")),
+                            fluidRow(box(DTOutput("ex_df53"), width = 11, title = "Resultado Danos Arquitetura e Agrárias")
+                              ,actionButton("saveBtn_ex_df53","Salvar")),
+                            fluidRow(box(DTOutput("ex_df51"), width = 11, title = "Resultado Danos a Renda")
+                                     ,actionButton("saveBtn_ex_df51","Salvar")),
+                              fluidRow(box(DTOutput("ex_df52"), width = 11, title = "Resultado Danos a Renda Por NF")
+                                       ,actionButton("saveBtn_ex_df52","Salvar")),
+                              fluidRow(box(DTOutput("ex_df27"), width = 11, title = "Resultado Danos Morais")
+                                       ,actionButton("saveBtn_ex_df27","Salvar"))
+                    )
+                    )
+)
+)
+
+
+
+
+server <- function(input, output, session) {
+
+  # Trick file date creation update
+  onStop(function() {
+
+    # File name
+    p <- paste0(getwd(), "/app.R")
+
+    # Update file 'date creation'
+    Sys.setFileTime(p, now())
+
+  }) # onStop
+
+  # Informações de autorização
+
+  # Banco de dados
+  ####################################################################
+  drive_matriz_id_update()
+  autorizar(email, primeira_vez_a_rodar )
+  gerar_todos_os_dados(usuario_logado)
+
+
+  output$usuario <- renderText({
+    #session$user
+    email
+  })
+
+  updateSelectInput(session, "v_NF",
+                    choices = data.frame("NF" = "Todos") %>%
+                      rbind(base %>%
+                      select(NF) %>%
+                      distinct())
+                    )
+
+
+  #   pasta_da_pessoa_identificada <- drive_matriz_id[as.character(usuario_logado)][[1]]
+  #   exportar(dados, nome = "dados_para_matriz", id_alternativo = pasta_da_pessoa_identificada)
+  # }
+
+
+    ##DADOS BÁSICOS DOS ATINGIDOS
+    output$Referencia <- renderInfoBox({
+        referencia<-  base %>%
+            filter(str_detect(NF, input$v_NF),
+                   `Relacao com o NF` == "Referência Familiar") %>%
+            distinct(Nome) %>%
+            mutate(Nome =  paste0(Nome))
+
+
+        infoBox(value = referencia, title = "Nome da Referência", color = "blue", icon = icon("file-signature"))
+    })
+
+
+    output$NF <- renderInfoBox({
+        nf <-  base %>%
+            filter(str_detect(NF, input$v_NF)) %>%
+            distinct(NF) %>%
+            mutate(NF =  paste0(NF))
+
+
+
+        infoBox(value = nf, title = "Código do NF", colo = "blue", icon = icon("archive"))
+    })
+
+
+
+    output$Endereco <- renderInfoBox({
+
+        endereco <- base %>%
+            filter(str_detect(NF, input$v_NF)) %>%
+            distinct(Endereco)
+
+        infoBox(value = endereco, title = "Endereco", colo = "blue", icon = icon("home"))
+
+    })
+
+    output$Telefone_1 <- renderInfoBox({
+        telefone1 <- base %>%
+            filter(str_detect(NF, input$v_NF)) %>%
+            distinct(`Número de telefone 1:`)
+
+        infoBox(value = telefone1, title = "Telefone 1", colo = "blue", icon = icon("phone"))
+    })
+
+    output$Telefone_2 <- renderInfoBox({
+        telefone2 <- base %>%
+            filter(str_detect(NF, input$v_NF)) %>%
+            distinct(`Número de telefone 2:`)
+
+        infoBox(value = telefone2, title = "Telefone 2", colo = "blue", icon = icon("phone"))
+    })
+
+
+    output$Telefone_3 <- renderInfoBox({
+        telefone3 <- base %>%
+            filter(str_detect(NF, input$v_NF)) %>%
+            distinct(`Número de telefone 3:`)
+
+        infoBox(value = telefone3, title = "Telefone 3", colo = "blue", icon = icon("phone"))
+    })
+
+
+    output$Dados_Gerais<- renderDT(
+      asd <- base %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))) %>%
+        select(1,10,2,3,4,5,9,11)
+
+      )
+
+
+
+#Funções para as tabelas dinamicas
+    x <<- reactiveValues()
+
+
+    # tabela_dinamica <- function(tbl, add, colunas, deletar){
+    #   DT::renderDataTable(datatable(tbl%>%
+    #                                   filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))),
+    #                                 plugins = "ellipsis",
+    #                                 class = 'white-space: nowrap',
+    #                                 filter = list(position = 'top', clear = TRUE, plain = TRUE) ,
+    #                                 extensions =  c('Buttons','AutoFill','FixedHeader', 'KeyTable','ColReorder'),
+    #                                 editable = list(target = 'cell'),
+    #                                 selection = "single",
+    #                                  escape = FALSE ,
+    #                                 options = list(scrollX = TRUE,
+    #                                                keys = TRUE,
+    #                                                colReorder = list(realtime = FALSE),
+    #                                                fixedHeader = TRUE,
+    #                                                autoFill = list(focus = 'click', horizontal = FALSE) ,
+    #                                                autoWidth=TRUE,
+    #                                                pageLength =5 ,
+    #                                                editable = TRUE,
+    #                                                lengthMenu = list(c(5, 50, -1), c('5', '50', 'All')),
+    #                                                dom = 't'
+    #                                                ,
+    #                                                buttons = list(c('colvis','pdf','excel'),
+    #                                                  list(extend = "collection",
+    #                                                    text = 'Mostrar Tudo'
+    #                                                    ,
+    #                                                    action = DT::JS("function ( e, dt, node, config ) { dt.page.len(-1);
+    #                                                    dt.ajax.reload();}")
+    #                                                    ))
+    #                                                )
+    #                                 ,
+    #                                 callback = JS(callback_teste(add, colunas, deletar))
+    #   ))
+    # }
+
+    tabela_dinamica <- function(tbl){
+
+
+      DT::renderDataTable(datatable(isolate(tbl)%>%
+                                      filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))),
+                                    plugins = "ellipsis",
+                                    class = 'white-space: nowrap',
+                                    filter = list(position = 'top', clear = TRUE, plain = TRUE) ,
+                                    extensions =  c('Buttons','AutoFill','FixedHeader', 'KeyTable','ColReorder'),
+                                    editable = list(target = 'cell'),
+                                    selection = "single",
+                                    escape = FALSE ,
+                                    options = list(scrollX = TRUE,
+                                                   keys = TRUE,
+                                                   colReorder = list(realtime = FALSE),
+                                                   fixedHeader = TRUE,
+                                                   autoFill = list(focus = 'click', horizontal = FALSE) ,
+                                                   autoWidth=TRUE,
+                                                   pageLength =5 ,
+                                                   editable = TRUE,
+                                                   lengthMenu = list(c(5, 50, -1), c('5', '50', 'All')),
+                                                   dom = 'lBfrtip'
+                                                   ,
+                                                   buttons = list(c('colvis','pdf','excel'),
+                                                                  list(extend = "collection",
+                                                                       text = 'Mostrar Tudo'
+                                                                       ,
+                                                                       action = DT::JS("function ( e, dt, node, config ) { dt.page.len(-1);
+                                                       dt.ajax.reload();}")
+                                                                  ))
+                                    )
+      ))
+    }
+
+    linhas_em_branco <- function(tbl2){
+
+      aux_nf <- base  %>%
+        filter(NF != 0) %>%
+        select(NF) %>%
+        distinct()
+
+      aux <-tbl2 %>%
+        head(5) %>%
+        mutate(across(!where(is.numeric), ~ "Editável")) %>%
+        mutate(across(where(is.numeric), ~ 0))%>%
+        mutate(NF = aux_nf$NF)
+
+      tbl<-  tbl2 %>%
+        filter(NF != 0) %>%
+        rbind(aux)
+    }
+
+
+
+    #Tabela Correção monetaria
+
+    x$ex_df54 <<-  datas_acionamento_acordo
+
+    output$ex_df54<-  tabela_dinamica(x$ex_df54)
+
+
+    proxy54 = dataTableProxy('ex_df54')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df54_cell_edit, {
+      info = input$ex_df54_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+
+      x$ex_df54[i,j] <- (DT::coerceValue(v, x$ex_df54[i,j]))
+
+      x$ex_df54 <- x$ex_df54 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy54, x$ex_df54, resetPaging = FALSE)  # important
+
+    })
+
+
+    observeEvent(input$saveBtn_ex_df54,{
+      salvar_tabela(x$ex_df54 , datas_acionamento_acordo, "datas_acionamento_acordo")
+    })
+
+    data_acordo_value <-reactive({x$ex_df54 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))) %>%
+        select(`Data do Acordo`)%>%
+        unlist()
+
+      })
+
+    data_paebm_value <-reactive({x$ex_df54 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))) %>%
+        select(`Data do Acionamento`)%>%
+        unlist()
+
+    })
+
+
+
+    x$ex_df2 <<- terrenos %>%
+      mutate(valor_terreno = case_when(`Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 160,
+                                       `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 9.4)) %>%
+      mutate(fator = case_when(`Área ZAS 3 (m²)` <= 500 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 1,
+                               `Área ZAS 3 (m²)` <= 650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/`Área ZAS 3 (m²)` )^(0.25),
+                               `Área ZAS 3 (m²)` >  650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/`Área ZAS 3 (m²)` )^(0.125),
+                               `Área ZAS 3 (m²)` <= 30000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 1 ,
+                               `Área ZAS 3 (m²)` <= 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/`Área ZAS 3 (m²)` )^(0.25),
+                               `Área ZAS 3 (m²)` > 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/`Área ZAS 3 (m²)` )^(0.125),
+                               TRUE ~ 0)) %>%
+      mutate(`Área ZAS 3 (m²)` = case_when(`Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 500,
+                                           `Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 30000,
+                                           TRUE ~ `Área ZAS 3 (m²)`))%>%
+      mutate(area_terreno = case_when(`Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 500,
+                                      `Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 30000,
+                                      TRUE ~ area_terreno)) %>%
+      mutate(`Porcentagem na ZAS (%)`  = 100*`Área ZAS 3 (m²)`/area_terreno) %>%
+      mutate( `Valor Total` = round(`Área ZAS 3 (m²)`* fator * valor_terreno,2))%>%
+      relocate(NF,Terreno,`Classificação final  (Considerando Convergência)`, `Relação com o Terreno`,area_terreno,
+               `Área ZAS 3 (m²)`, `Porcentagem na ZAS (%)`, fator,valor_terreno, `Valor Total`,primary_key) %>% linhas_em_branco()
+
+
+    proxy2 = dataTableProxy('ex_df2')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df2_cell_edit, {
+        info = input$ex_df2_cell_edit
+        str(info)
+        #
+        # str(input$ex_df2)
+
+        i = info$row
+        j = info$col
+        v = info$value
+        print(x$ex_df2)
+
+
+
+        if(j %in% c(5,6,7)){
+
+          x$ex_df2[i,j] <-  as.numeric(DT::coerceValue(v, x$ex_df2[i,j]))
+
+
+          x$ex_df2 <- x$ex_df2 %>%
+            mutate(valor_terreno = case_when(`Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 160,
+                                             `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 9.4)) %>%
+            mutate(fator = case_when(area_terreno <= 500 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 1,
+                                     area_terreno <= 650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.25),
+                                     area_terreno >  650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.125),
+                                     area_terreno <= 30000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 1 ,
+                                     area_terreno <= 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.25),
+                                     area_terreno > 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.125),
+                                     TRUE ~ 0))%>%
+            mutate(`Área ZAS 3 (m²)` = case_when(`Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 500,
+                                                 `Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 30000,
+                                                 TRUE ~ `Área ZAS 3 (m²)`))%>%
+            mutate(area_terreno = case_when(`Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 500,
+                                            `Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 30000,
+                                            TRUE ~ area_terreno)) %>%
+            mutate(`Porcentagem na ZAS (%)`  = 100*`Área ZAS 3 (m²)`/area_terreno) %>%
+            mutate( `Valor Total` = round(`Área ZAS 3 (m²)`* fator * valor_terreno,2))%>%
+            relocate(NF,Terreno,`Classificação final  (Considerando Convergência)`, `Relação com o Terreno`,area_terreno,
+                     `Área ZAS 3 (m²)`, `Porcentagem na ZAS (%)`, fator,valor_terreno, `Valor Total`,primary_key) %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+            DT::replaceData(proxy2, x$ex_df2, resetPaging = FALSE)
+
+
+        }
+
+        else{
+
+          x$ex_df2[i,j] <- (DT::coerceValue(v, x$ex_df2[i,j]))
+
+
+          x$ex_df2 <- x$ex_df2 %>%
+            mutate(valor_terreno = case_when(`Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 160,
+                                             `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 9.4)) %>%
+            mutate(fator = case_when(area_terreno <= 500 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 1,
+                                     area_terreno <= 650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.25),
+                                     area_terreno >  650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.125),
+                                     area_terreno <= 30000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 1 ,
+                                     area_terreno <= 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.25),
+                                     area_terreno > 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.125),
+                                     TRUE ~ 0)) %>%
+            mutate(`Área ZAS 3 (m²)` = case_when(`Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 500,
+                                                 `Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 30000,
+                                                 TRUE ~ `Área ZAS 3 (m²)`))%>%
+            mutate(area_terreno = case_when(`Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 500,
+                                            `Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 30000,
+                                            TRUE ~ area_terreno)) %>%
+            mutate(`Porcentagem na ZAS (%)`  = 100*`Área ZAS 3 (m²)`/area_terreno) %>%
+            mutate( `Valor Total` = round(`Área ZAS 3 (m²)`* fator * valor_terreno,2))%>%
+            relocate(NF,Terreno,`Classificação final  (Considerando Convergência)`, `Relação com o Terreno`,area_terreno,
+                     `Área ZAS 3 (m²)`, `Porcentagem na ZAS (%)`, fator,valor_terreno, `Valor Total`,primary_key) %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+          DT::replaceData(proxy2, x$ex_df2, resetPaging = FALSE)
+        }
+
+
+    })
+
+    # output$ex_df2 <-  tabela_dinamica(x$ex_df2, add = "add_btn", colunas = 12, deletar = "delete_btn" )
+    output$ex_df2 <-  tabela_dinamica(x$ex_df2)
+
+
+
+    output$terra_nua_box <- renderInfoBox({
+
+      x$ex_df2 %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+            ))) %>%
+            mutate( `Valor Total` = round(`Área ZAS 3 (m²)`* fator * valor_terreno,2)) %>%
+            summarise(round(plus(`Valor Total`),2)) %>%
+            prettyNum(big.mark = ",", decimal.mark = ".") %>%
+            currency(symbol = "R$") %>%
+            valueBox(subtitle = "Valor Total Terra Nua",
+                     icon = icon("mountain"),
+                     color = "red")
+
+
+    })
+
+    observeEvent(input$saveBtn_ex_df2,{
+      salvar_tabela(x$ex_df2, terrenos, "terrenos")
+    })
+
+
+    #DF DOS DADOS DE RESIDENCIA
+
+    x$ex_df3 <-  imoveis%>%
+        mutate(valor_unitario = case_when(Padrao_construtivo == "Padrão médio" ~ 2382.64,
+                                          Padrao_construtivo == "Padrão Alto"  ~ 2892.72)) %>%
+        mutate(`Valor do Item` = valor_unitario* Tamanho) %>%
+      relocate(NF, `Codigo do Item`, Item, Padrao_construtivo,Tamanho,valor_unitario, `Valor do Item`,primary_key ) %>%
+      linhas_em_branco()
+
+
+    proxy3 = dataTableProxy(outputId = 'ex_df3')
+
+    data = reactiveValues()
+
+    observeEvent(
+      input$ex_df3_cell_edit, {
+        info = input$ex_df3_cell_edit
+        str(info)
+        i = info$row
+        j = info$col
+        #print(j)
+        v = info$value
+        # str(x$ex_df3)
+        # print("---")
+        # str(x$ex_df3[i,j])
+
+        if(j %in% c(5,6)){
+
+
+          x$ex_df3[i,j] <- numero(DT::coerceValue(v, x$ex_df3[i,j]))
+
+          x$ex_df3 <- x$ex_df3 %>%
+            mutate(valor_unitario = case_when(Padrao_construtivo == "Padrão médio" ~ 2382.64,
+                                              Padrao_construtivo == "Padrão Alto"  ~ 2892.72)) %>%
+            mutate(`Valor do Item` = valor_unitario* Tamanho) %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+          DT::replaceData(proxy3, x$ex_df3, resetPaging = FALSE)  # important
+
+        }
+        else{
+            x$ex_df3[i,j] <- (DT::coerceValue(v, x$ex_df3[i,j]))
+
+          x$ex_df3 <- x$ex_df3 %>%
+            mutate(valor_unitario = case_when(Padrao_construtivo == "Padrão médio" ~ 2382.64,
+                                              Padrao_construtivo == "Padrão Alto"  ~ 2892.72)) %>%
+            mutate(`Valor do Item` = valor_unitario* Tamanho) %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+          DT::replaceData(proxy3, x$ex_df3, resetPaging = FALSE)
+
+
+        }
+
+
+      })
+
+
+    # output$ex_df3 <-  tabela_dinamica(x$ex_df3, add = "add_btn1", colunas = 9, "delete_btn1")
+    output$ex_df3 <-  tabela_dinamica(x$ex_df3)
+
+
+
+
+    output$imoveis_moradia <- renderInfoBox({
+
+      x$ex_df3%>%
+        mutate(valor_unitario = case_when(Padrao_construtivo == "Padrão médio" ~ 2382.64,
+                                          Padrao_construtivo == "Padrão Alto"  ~ 2892.72))  %>%
+        mutate(`Valor do Item` = valor_unitario* Tamanho)  %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+            ))) %>%
+            summarise(round(plus(`Valor do Item`),2)) %>%
+            prettyNum(big.mark = ",", decimal.mark = ".") %>%
+            currency(symbol = "R$") %>%
+            valueBox(subtitle = "Valor Total Moradia",
+                     icon = icon("home"),
+                     color = "red")
+
+
+    })
+
+    observeEvent(input$saveBtn_ex_df3,{
+      salvar_tabela(x$ex_df3, imoveis, "imoveis")
+    })
+
+    arquitetura <- arquitetura %>%
+      mutate(`Codigo do Item` = as.character(`Codigo do Item`),
+             `NF-TR` = as.character(`NF-TR`),
+             primary_key = as.character(primary_key),
+             Item = as.character(Item),
+             `Fonte/Descrição` = as.character(`Fonte/Descrição`),
+             `Unidade/Medida` = as.character(`Unidade/Medida`),
+             parte_matriz = as.character(parte_matriz),
+             NF = as.character(NF)) %>%
+      unnest(cols = c(primary_key, Item, `Fonte/Descrição`, `Unidade/Medida`, parte_matriz,
+                      NF))
+    #IMÓVEIS PARA O LAZER
+
+    x$ex_df4 <<- arquitetura %>%
+        filter(parte_matriz == "lazer") %>%
+        mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+      relocate(NF, `NF-TR`, Item,`Codigo do Item`, Quantidade, `Fonte/Descrição`, `Unidade/Medida`,
+               `Valor unitário`,`Valor do Item`,parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "lazer")
+
+    # output$ex_df4 <-  tabela_dinamica(x$ex_df4, add = "add_btn2", colunas = 12, "delete_btn2" )
+    output$ex_df4 <-  tabela_dinamica(x$ex_df4)
+
+
+
+    # output$ex_df4 <-  tabela_dinamica(x$ex_df4)
+
+    proxy4 = dataTableProxy('ex_df4')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df4_cell_edit, {
+        info = input$ex_df4_cell_edit
+        str(info)
+        # str(input$x1_state)
+        i = info$row
+        j = info$col
+        v = info$value
+        print(x$ex_df4)
+
+
+        if(j %in% c(5,8)){
+
+
+        x$ex_df4[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df4[i,j]))
+
+        x$ex_df4 <- x$ex_df4  %>%
+          mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))%>%
+          relocate(NF, `NF-TR`, Item,`Codigo do Item`, Quantidade, `Fonte/Descrição`, `Unidade/Medida`,
+                   `Valor unitário`,`Valor do Item`,parte_matriz ,primary_key)
+        DT::replaceData(proxy4, x$ex_df4, resetPaging = FALSE)  # important
+        }
+
+        else{
+
+          x$ex_df4[i,j] <-(DT::coerceValue(v, x$ex_df4[i,j]))
+
+          x$ex_df4 <- x$ex_df4  %>%
+            mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))%>%
+            relocate(NF, `NF-TR`, Item,`Codigo do Item`, Quantidade, `Fonte/Descrição`, `Unidade/Medida`,
+                     `Valor unitário`,`Valor do Item`,parte_matriz ,primary_key)
+          DT::replaceData(proxy4, x$ex_df4, resetPaging = FALSE)  # important
+        }
+
+
+    })
+
+
+
+    output$imoveis_lazer <- renderInfoBox({
+
+
+      x$ex_df4 %>%
+        mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        summarise(round(plus(`Valor do Item`),2)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Total Construção Lazer",
+                 icon = icon("swimming-pool"),
+                 color = "red")
+    })
+
+    observeEvent(input$saveBtn_ex_df4,{
+      salvar_tabela(x$ex_df4, arquitetura_clone(), "arquitetura")
+    })
+
+    #####imoveis_animais
+
+    observeEvent(input$saveBtn_ex_df5,{
+      salvar_tabela(x$ex_df5, arquitetura_clone(), "arquitetura")
+    })
+
+    x$ex_df5 <<-  arquitetura %>%
+        filter(parte_matriz == "animais")  %>%
+      mutate(`Valor do Item` = Quantidade*`Valor unitário`)%>%
+      relocate(NF, `NF-TR`, Item,`Codigo do Item`, Quantidade, `Fonte/Descrição`, `Unidade/Medida`,
+               `Valor unitário`,`Valor do Item`,parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "animais")
+
+
+    # output$ex_df5 <-  tabela_dinamica(x$ex_df5, add = "add_btn3", colunas = 11, "delete_btn3" )
+    output$ex_df5 <-  tabela_dinamica(x$ex_df5)
+
+
+    proxy5 = dataTableProxy('ex_df5')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df5_cell_edit, {
+        info = input$ex_df5_cell_edit
+        str(info)
+        # str(input$x1_state)
+        i = info$row
+        j = info$col
+        v = info$value
+
+        print(x$ex_df5)
+
+
+        if(j %in% c(5,8)){
+
+
+        x$ex_df5[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df5[i,j]))
+
+        x$ex_df5 <- x$ex_df5  %>%
+          mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy5, x$ex_df5, resetPaging = FALSE)  # important
+
+        }
+
+        else {
+          x$ex_df5[i,j] <-(DT::coerceValue(v, x$ex_df5[i,j]))
+
+          x$ex_df5 <- x$ex_df5  %>%
+            mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+          DT::replaceData(proxy5, x$ex_df5, resetPaging = FALSE)  # important
+
+        }
+
+    })
+
+
+
+    output$imoveis_animais <- renderInfoBox({
+
+
+      x$ex_df5 %>%
+        mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        summarise(round(plus(`Valor do Item`),2)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Total Construção Animais",
+                 icon = icon("paw"),
+                 color = "red")
+
+    })
+
+
+    #####imoveis_cotidiano
+
+    observeEvent(input$saveBtn_ex_df6,{
+      salvar_tabela(x$ex_df6, arquitetura_clone(), "arquitetura")
+    })
+
+
+    x$ex_df6 <<-  arquitetura %>%
+      filter(parte_matriz == "cotidiano")  %>%
+      mutate(`Valor do Item` = Quantidade*`Valor unitário`)%>%
+      relocate(NF, `NF-TR`, Item,`Codigo do Item`, Quantidade, `Fonte/Descrição`, `Unidade/Medida`,
+               `Valor unitário`,`Valor do Item`,parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "cotidiano")
+
+
+    # output$ex_df6 <-  tabela_dinamica(x$ex_df6, add = "add_btn4", colunas = 11, "delete_btn4" )
+    output$ex_df6 <-  tabela_dinamica(x$ex_df6)
+
+
+    proxy6 = dataTableProxy('ex_df6')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df6_cell_edit, {
+        info = input$ex_df6_cell_edit
+        str(info)
+        # str(input$x1_state)
+        i = info$row
+        j = info$col
+        v = info$value
+
+        print(x$ex_df6)
+
+
+        if(j %in% c(5,8)){
+
+        x$ex_df6[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df6[i,j]))
+
+        x$ex_df6 <- x$ex_df6  %>%
+          mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy6, x$ex_df6, resetPaging = FALSE)
+        }
+
+        else{
+          x$ex_df6[i,j] <-(DT::coerceValue(v, x$ex_df6[i,j]))
+
+          x$ex_df6 <- x$ex_df6  %>%
+            mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+          DT::replaceData(proxy6, x$ex_df6, resetPaging = FALSE)
+
+
+        }
+    })
+
+    output$imoveis_cotidiano <- renderInfoBox({
+
+      x$ex_df6  %>%
+        mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        summarise(round(plus(`Valor do Item`),2)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Total Construção Cotidiano",
+                 icon = icon("sink"),
+                 color = "red")
+
+
+    })
+
+
+    ##############imoveis_religioso
+
+
+
+    #x <<- reactiveValues()
+
+    observeEvent(input$saveBtn_ex_df7,{
+      salvar_tabela(x$ex_df7, arquitetura_clone(), "arquitetura")
+    })
+
+
+    x$ex_df7 <<- arquitetura %>%
+        filter(parte_matriz == "religioso")  %>%
+      mutate(`Valor do Item` = Quantidade*`Valor unitário`)%>%
+      relocate(NF, `NF-TR`, Item,`Codigo do Item`, Quantidade, `Fonte/Descrição`, `Unidade/Medida`,
+               `Valor unitário`,`Valor do Item`,parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "religioso")
+
+
+    # output$ex_df7 <-  tabela_dinamica(x$ex_df7, add = "add_btn5", colunas = 11, "delete_btn5" )
+    output$ex_df7 <-  tabela_dinamica(x$ex_df7)
+
+
+    proxy7 = dataTableProxy('ex_df7')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df7_cell_edit, {
+
+        info = input$ex_df7_cell_edit
+        str(info)
+        i = info$row
+        j = info$col
+        v = info$value
+
+        print(x$ex_df7)
+
+
+        if(j %in% c(5,8)){
+
+
+        x$ex_df7[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df7[i,j]))
+
+        x$ex_df7 <- x$ex_df7  %>%
+          mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy7, x$ex_df7, resetPaging = FALSE)  # important
+        }
+
+        else{
+
+          x$ex_df7[i,j] <-(DT::coerceValue(v, x$ex_df7[i,j]))
+
+          x$ex_df7 <- x$ex_df7  %>%
+            mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+          DT::replaceData(proxy7, x$ex_df7, resetPaging = FALSE)  # important
+
+        }
+
+    })
+
+
+    output$imoveis_religioso <- renderInfoBox({
+
+      x$ex_df7 %>%
+        mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+            ))) %>%
+        summarise(round(plus(`Valor do Item`),2)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+            currency(symbol = "R$") %>%
+            valueBox(subtitle = "Valor Total Construção Religioso e Comércio",
+                     icon = icon("praying-hands"),
+                     color = "red")
+
+
+    })
+
+    #Benfeitorias
+
+    observeEvent(input$saveBtn_ex_df8,{
+      salvar_tabela(x$ex_df8, arquitetura_clone(), "arquitetura")
+    })
+
+    x$ex_df8 <<- arquitetura %>%
+      filter(parte_matriz == "benfeitorias")  %>%
+      mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+      relocate(NF, `NF-TR`, Item,`Codigo do Item`, Quantidade, `Fonte/Descrição`, `Unidade/Medida`,
+               `Valor unitário`,`Valor do Item`,parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "benfeitorias")
+
+
+    # output$ex_df8 <-  tabela_dinamica(x$ex_df8, add = "add_btn6", colunas = 11, "delete_btn6" )
+    output$ex_df8 <-  tabela_dinamica(x$ex_df8)
+
+
+    proxy8 = dataTableProxy('ex_df8')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df8_cell_edit, {
+        info = input$ex_df8_cell_edit
+
+        str(info)
+
+        i = info$row
+        j = info$col
+        v = info$value
+
+        print(x$ex_df8)
+
+
+        if(j %in% c(5,8)){
+
+        x$ex_df8[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df8[i,j]))
+
+        x$ex_df8 <- x$ex_df8  %>%
+          mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))%>%
+          relocate(NF, `NF-TR`, Item,`Codigo do Item`, Quantidade, `Fonte/Descrição`, `Unidade/Medida`,
+                   `Valor unitário`,`Valor do Item`,parte_matriz ,primary_key)
+        DT::replaceData(proxy8, x$ex_df8, resetPaging = FALSE)  # important
+        }
+
+        else{
+          x$ex_df8[i,j] <-(DT::coerceValue(v, x$ex_df8[i,j]))
+
+          x$ex_df8 <- x$ex_df8 %>%
+            mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))%>%
+            relocate(NF, `NF-TR`, Item,`Codigo do Item`, Quantidade, `Fonte/Descrição`, `Unidade/Medida`,
+                     `Valor unitário`,`Valor do Item`,parte_matriz ,primary_key)
+          DT::replaceData(proxy8, x$ex_df8, resetPaging = FALSE)  # important
+
+        }
+
+    })
+
+
+
+
+    output$imoveis_benfeitorias <- renderInfoBox({
+
+      x$ex_df8 %>%
+        mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+            ))) %>%
+        summarise(round(plus(`Valor do Item`),2)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+            currency(symbol = "R$") %>%
+            valueBox(subtitle = "Valor Total Benfeitorias",
+                     icon = icon("hammer"),
+                     color = "red")
+
+
+
+    })
+
+
+
+
+
+    ################objetos
+
+
+    x$ex_df9 <<-  objetos %>%
+        mutate(`Valor do Item` = Quantidade*`Valor Unitário`)%>%
+        filter(Situação == "Encontrado") %>%
+      linhas_em_branco()
+
+
+
+    # output$ex_df9 <-  tabela_dinamica(x$ex_df9, add = "add_btn7", colunas = 9, "delete_btn7" )
+    output$ex_df9 <-  tabela_dinamica(x$ex_df9)
+
+
+    proxy9 = dataTableProxy('ex_df9')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df9_cell_edit, {
+        info = input$ex_df9_cell_edit
+        str(info)
+        # str(input$x1_state)
+        i = info$row
+        j = info$col
+        v = info$value
+
+        print(x$ex_df9)
+
+        if(j %in% c(6,8)){
+
+
+        x$ex_df9[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df9[i,j]))
+
+        x$ex_df9 <- x$ex_df9 %>%
+            mutate(`Valor do Item` = Quantidade*`Valor Unitário`)%>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy9, x$ex_df9, resetPaging = FALSE)  # important
+
+        }
+
+        else{
+          x$ex_df9[i,j] <-(DT::coerceValue(v, x$ex_df9[i,j]))
+
+          x$ex_df9 <- x$ex_df9 %>%
+            mutate(`Valor do Item` = Quantidade*`Valor Unitário`)%>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+          DT::replaceData(proxy9, x$ex_df9, resetPaging = FALSE)  # important
+
+        }
+
+    })
+
+
+    observeEvent(input$saveBtn_ex_df9,{
+      salvar_tabela(x$ex_df9, objetos_clone(), "objetos")
+    })
+
+
+    output$objetos <- renderInfoBox({
+
+      x$ex_df9 %>%
+            mutate(`Valor do Item` =`Valor Unitário`  * Quantidade) %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+            ))) %>%
+        summarise(round(plus(`Valor do Item`),2)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+            currency(symbol = "R$") %>%
+            valueBox(subtitle = "Valor Total Objetos",
+                     icon = icon("utensil-spoon"),
+                     color = "red")
+
+
+
+    })
+
+    output$meses_pivacao <- renderInfoBox({
+
+      a<- as.data.frame(c(1))
+
+       aux <- a %>%
+         mutate(`Tempo passado` = case_when(input$data_evacuacao == "8/2/2019" ~ 28,
+                                            input$data_evacuacao == "11/7/2019" ~ 23,
+                                            input$data_evacuacao == "1/4/2020" ~ 14))
+       aux%>%
+         select(`Tempo passado`) %>%
+         #select(NF, `Valor líquido`) %>%
+         # prettyNum(big.mark = ",", decimal.mark = ".") %>%
+         # currency(symbol = "R$") %>%
+         valueBox(subtitle = "Tempo Privação de uso",
+                  icon = icon("salad"),
+                  color = "green")
+
+    })
+
+    observeEvent(input$saveBtn_ex_df60,{
+      salvar_tabela(x$ex_df60, privacao_de_uso, "privacao_de_uso")
+    })
+
+
+    x$ex_df60 <<- privacao_de_uso %>%
+      mutate(`Valor Total` = `Valor do item`* `Número de meses` * `Porcentagem de uso do NF nos casos de uso compartilhado`* Taxa )
+
+
+
+    # output$ex_df8 <-  tabela_dinamica(x$ex_df60, add = "add_btn6", colunas = 11, "delete_btn6" )
+    output$ex_df60 <-  tabela_dinamica(x$ex_df60)
+
+
+    proxy60 = dataTableProxy('ex_df60')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df60_cell_edit, {
+      info = input$ex_df60_cell_edit
+
+      str(info)
+
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df60)
+
+
+      if(j %in% c(4,5,6,7)){
+
+        x$ex_df60[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df60[i,j]))
+
+        x$ex_df60 <- x$ex_df60  %>%
+          mutate(`Número de meses` =case_when(input$data_evacuacao == "8/2/2019" ~ 28,
+                                              input$data_evacuacao == "11/7/2019" ~ 23,
+                                              input$data_evacuacao == "1/4/2020" ~ 14)) %>%
+          mutate(`Valor Total` = `Valor do item`* `Número de meses` * `Porcentagem de uso do NF nos casos de uso compartilhado`* Taxa )%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy60, x$ex_df60, resetPaging = FALSE)  # important
+      }
+
+      else{
+        x$ex_df60[i,j] <-(DT::coerceValue(v, x$ex_df60[i,j]))
+
+        x$ex_df60 <- x$ex_df60  %>%
+          mutate(`Número de meses` =case_when(input$data_evacuacao == "8/2/2019" ~ 28,
+                                              input$data_evacuacao == "11/7/2019" ~ 23,
+                                              input$data_evacuacao == "1/4/2020" ~ 14)) %>%
+          mutate(`Valor Total` = `Valor do item`* `Número de meses` * `Porcentagem de uso do NF nos casos de uso compartilhado`* Taxa )%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy60, x$ex_df60, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+
+
+    x$ex_df61 <<- terrenos %>%
+      mutate(valor_terreno = case_when(`Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 160,
+                                       `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 9.4)) %>%
+      mutate(fator = case_when(area_terreno <= 500 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 1,
+                               area_terreno <= 650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.25),
+                               area_terreno >  650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.125),
+                               area_terreno <= 30000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 1 ,
+                               area_terreno <= 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.25),
+                               area_terreno > 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.125),
+                               TRUE ~ 0)) %>%
+      mutate(`Área ZAS 3 (m²)` = case_when(`Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 500,
+                                           `Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 30000,
+                                           TRUE ~ `Área ZAS 3 (m²)`))%>%
+      mutate(area_terreno = case_when(`Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 500,
+                                      `Relação com o Terreno` == "Não Proprietário" &  `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 30000,
+                                      TRUE ~ area_terreno)) %>%
+      mutate(`Porcentagem na ZAS (%)`  = 100*`Área ZAS 3 (m²)`/valor_terreno) %>%
+      mutate( `Valor Total` = round(`Área ZAS 3 (m²)`* fator * valor_terreno,2))%>%
+      relocate(NF,Terreno,`Classificação final  (Considerando Convergência)`, `Relação com o Terreno`,area_terreno,
+               `Área ZAS 3 (m²)`, `Porcentagem na ZAS (%)`, fator,valor_terreno, `Valor Total`,primary_key)
+
+
+    output$ex_df61 <- tabela_dinamica(x$ex_df61)
+
+
+
+    proxy61 = dataTableProxy('ex_df61')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df61_cell_edit, {
+      info = input$ex_df61_cell_edit
+      str(info)
+      #
+      # str(input$ex_df61)
+
+      i = info$row
+      j = info$col
+      v = info$value
+
+
+
+      if(j %in% c(5,6,7)){
+
+        x$ex_df61[i,j] <-  as.numeric(DT::coerceValue(v, x$ex_df61[i,j]))
+
+
+        x$ex_df61 <- x$ex_df61 %>%
+          mutate(valor_terreno = case_when(`Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 160,
+                                           `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 9.4)) %>%
+          mutate(fator = case_when(area_terreno <= 500 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 1,
+                                   area_terreno <= 650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.25),
+                                   area_terreno >  650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.125),
+                                   area_terreno <= 30000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 1 ,
+                                   area_terreno <= 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.25),
+                                   area_terreno > 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.125),
+                                   TRUE ~ 0)) %>%
+          mutate(`Porcentagem na ZAS (%)`  = 100*`Área ZAS 3 (m²)`/valor_terreno) %>%
+          mutate( `Valor Total` = round(`Área ZAS 3 (m²)`* fator * valor_terreno,2))%>%
+          relocate(NF,Terreno,`Classificação final  (Considerando Convergência)`, `Relação com o Terreno`,area_terreno,
+                   `Área ZAS 3 (m²)`, `Porcentagem na ZAS (%)`, fator,valor_terreno, `Valor Total`,primary_key) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy61, x$ex_df61, resetPaging = FALSE)
+
+
+      }
+
+      else{
+
+        x$ex_df61[i,j] <- (DT::coerceValue(v, x$ex_df61[i,j]))
+
+
+        x$ex_df61 <- x$ex_df61 %>%
+          mutate(valor_terreno = case_when(`Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 160,
+                                           `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 9.4)) %>%
+          mutate(fator = case_when(area_terreno <= 500 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ 1,
+                                   area_terreno <= 650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.25),
+                                   area_terreno >  650 & `Classificação final  (Considerando Convergência)` == "Imóvel urbano" ~ (500/area_terreno )^(0.125),
+                                   area_terreno <= 30000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ 1 ,
+                                   area_terreno <= 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.25),
+                                   area_terreno > 39000 & `Classificação final  (Considerando Convergência)` == "Imóvel rural" ~ (30000/area_terreno )^(0.125),
+                                   TRUE ~ 0)) %>%
+          mutate(`Porcentagem na ZAS (%)`  = 100*`Área ZAS 3 (m²)`/valor_terreno) %>%
+          mutate( `Valor Total` = round(`Área ZAS 3 (m²)`* fator * valor_terreno,2))%>%
+          relocate(NF,Terreno,`Classificação final  (Considerando Convergência)`, `Relação com o Terreno`,area_terreno,
+                   `Área ZAS 3 (m²)`, `Porcentagem na ZAS (%)`, fator,valor_terreno, `Valor Total`,primary_key) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy61, x$ex_df61, resetPaging = FALSE)
+      }
+
+    })
+
+
+    #AGRARIAS
+
+    observeEvent(input$saveBtn_ex_df010,{
+      salvar_tabela(x$ex_df010, agrarias_clone(), "agrarias")
+    })
+
+
+
+    x$ex_df010 <<- agrarias  %>%
+      filter(parte_matriz == "horta") %>%
+      linhas_em_branco() %>% mutate(parte_matriz = "horta")%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)
+
+
+    #Code to convert Factor
+    #DT <- as.data.frame(unclass(DT))
+
+    # output$ex_df010 <-  tabela_dinamica(x$ex_df010, add = "add_btn8", colunas = 10, "delete_btn8" )
+    output$ex_df010 <-  tabela_dinamica(x$ex_df010)
+
+
+    proxy010 = dataTableProxy('ex_df010')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df010_cell_edit, {
+      info = input$ex_df010_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df010)
+
+
+      # Without this line the table does not change but with it it jumps to row 1 after an edit.
+
+      if(j %in% c(4,6,7)){
+
+        x$ex_df010[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df010[i,j]))
+
+        x$ex_df010 <- x$ex_df010 %>%
+          relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+                   `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy010, x$ex_df010, resetPaging = FALSE)  # important
+        # Now we need to scroll to row i somehow ... clearly this does not work. Help!
+        #selectPage(proxy, ceiling(i / page_length))
+        # selectRow(proxy, i)
+      }
+
+      else {
+
+        x$ex_df010[i,j] <-(DT::coerceValue(v, x$ex_df010[i,j]))
+
+        x$ex_df010 <- x$ex_df010 %>%
+          relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+                   `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy010, x$ex_df010, resetPaging = FALSE)  # i important
+        # Now we need to scroll to row i somehow ... clearly this does not work. Help!
+        #selectPage(proxy, ceiling(i / page_length))
+        # selectRow(proxy, i)
+      }
+    })
+
+
+
+
+
+    ##TODOS DADOS AGRÁRIAS
+
+
+    ##DF DOS ITENS DE AGRÁRIAS
+
+    ex_df10 <-    reactive({
+
+      data <-x$ex_df010  %>%
+      group_by(NF) %>%
+      summarise(Quantidade = sum(Quantidade)) %>%
+      ungroup() %>%
+      left_join(agrarias%>%
+                   filter(parte_matriz == "horta_conta") %>%
+                   select(-c(Quantidade)) %>%
+                   distinct()) %>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz) %>%
+      mutate( `Valor Item` = case_when(Quantidade >= 20000 ~ 35.81, ##valores provenientes da calculadora de Matriz de danos
+                                       TRUE ~ 53.62)) %>%
+      mutate(`% Custos de produção` = case_when(Quantidade >= 20000 ~ 0.7,
+                                                Quantidade < 75 ~ 0.28,
+                                                Quantidade > 1999.97 ~ 0.6,
+                                                TRUE ~ (26.8395710629367+0.0165804597430447*Quantidade)/100 ),
+             "Valor liquido" = round((Quantidade*`Valor Item`*(1-`% Custos de produção`)/12),2)) %>%
+      linhas_em_branco() %>%
+      mutate(parte_matriz = "horta")
+    })
+
+
+
+    output$ex_df10 <- renderDataTable({
+
+
+    datatable(ex_df10()%>%
+                filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))))
+
+    })
+
+
+
+    #Code to convert Factor
+    #DT <- as.data.frame(unclass(DT))
+
+    # output$ex_df10 <-  tabela_dinamica(x$ex_df10, add = "add_btn8", colunas = 10, "delete_btn8" )
+    #   tabela_dinamica(x$ex_df10)
+    #
+    #
+    # proxy10 = dataTableProxy('ex_df10')
+    #
+    # data = reactiveValues()
+    # observeEvent(input$ex_df10_cell_edit, {
+    #   info = input$ex_df10_cell_edit
+    #   str(info)
+    #   # str(input$x1_state)
+    #   i = info$row
+    #   j = info$col
+    #   v = info$value
+    #
+    #   print(x$ex_df10)
+    #
+    #
+    #   # Without this line the table does not change but with it it jumps to row 1 after an edit.
+    #
+    #   if(j %in% c(4,6,7)){
+    #
+    #   x$ex_df10[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df10[i,j]))
+    #
+    #   x$ex_df10 <- x$ex_df10   %>%
+    #     mutate( `Valor Item` = case_when(Quantidade >= 20000 ~ 35.81, ##valores provenientes da calculadora de Matriz de danos
+    #                                      TRUE ~ 53.62)) %>%
+    #     mutate(`% Custos de produção` = case_when(Quantidade >= 20000 ~ 0.7,
+    #                                               Quantidade < 75 ~ 0.28,
+    #                                               Quantidade > 1999.97 ~ 0.6,
+    #                                               TRUE ~ (26.8395710629367+0.0165804597430447*Quantidade)/100 ),
+    #            "Valor Total" = round((Quantidade*`Valor Item`*(1-`% Custos de produção`)/12),2)) %>%
+    #     relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+    #              `Valor Item`, `% Custos de produção` ,`Valor Total`, parte_matriz ,primary_key)%>%
+    #     filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+    #   DT::replaceData(proxy10, x$ex_df10, resetPaging = FALSE)  # important
+    #   # Now we need to scroll to row i somehow ... clearly this does not work. Help!
+    #   #selectPage(proxy, ceiling(i / page_length))
+    #   # selectRow(proxy, i)
+    #   }
+    #
+    #   else {
+    #
+    #     x$ex_df10[i,j] <-(DT::coerceValue(v, x$ex_df10[i,j]))
+    #
+    #     x$ex_df10 <- x$ex_df10  %>%
+    #       mutate( `Valor Item` = case_when(Quantidade >= 20000 ~ 35.81, ##valores provenientes da calculadora de Matriz de danos
+    #                                        TRUE ~ 53.62)) %>%
+    #       mutate(`% Custos de produção` = case_when(Quantidade >= 20000 ~ 0.7,
+    #                                                 Quantidade < 75 ~ 0.28,
+    #                                                 Quantidade > 1999.97 ~ 0.6,
+    #                                                 TRUE ~ (26.8395710629367+0.0165804597430447*Quantidade)/100 ),
+    #              "Valor Total" = round((Quantidade*`Valor Item`*(1-`% Custos de produção`)/12),2)) %>%
+    #       relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+    #                `Valor Item`, `% Custos de produção` ,`Valor Total`, parte_matriz ,primary_key)
+    #     filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+    #     DT::replaceData(proxy10, x$ex_df10, resetPaging = FALSE)  # important
+    #     # Now we need to scroll to row i somehow ... clearly this does not work. Help!
+    #     #selectPage(proxy, ceiling(i / page_length))
+    #     # selectRow(proxy, i)
+    #   }
+    # })
+    #
+    #
+
+    #
+    # ##TODOS OS DADOS ARQUITETURA
+
+    # DF DOS DADOS DOS TERRENOS TERRA NUA
+
+
+
+    output$horta <- renderInfoBox({
+
+      horta <- ex_df10() %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF ))) %>%
+        # mutate( `Valor Item` = case_when(Quantidade >= 20000 ~ 35.81, ##valores provenientes da calculadora de Matriz de danos
+        #                                  TRUE ~ 53.62)) %>%
+        # mutate("% Custos de producao" = case_when(Quantidade >= 20000 ~ 0.7,
+        #                                           Quantidade < 75 ~ 0.28,
+        #                                           Quantidade > 1999.97 ~ 0.6,
+        #                                           TRUE ~ (26.8395710629367+0.0165804597430447*Quantidade)/100 ),
+        #        "Valor Total" = round((Quantidade*`Valor Item`*(1-`% Custos de producao`)/12),2)) %>%
+        summarise(total = plus(`Valor liquido`))
+
+      horta%>%
+        #select(NF, `Valor líquido`) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Horta",
+                 icon = icon("salad"),
+                 color = "green")
+
+
+
+
+    })
+
+
+
+    #FRUTIFERAS
+
+    observeEvent(input$saveBtn_ex_df11,{
+      salvar_tabela(x$ex_df11, agrarias_clone(), "agrarias")
+    })
+
+    x$ex_df11 <<-  agrarias %>%
+      filter(parte_matriz == "frutiferas") %>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>%
+      linhas_em_branco() %>% mutate(parte_matriz = "frutiferas")
+
+
+    # output$ex_df11 <-  tabela_dinamica(x$ex_df11, add = "add_btn9", colunas = 10, "delete_btn9" )
+    output$ex_df11 <-  tabela_dinamica(x$ex_df11)
+
+
+    proxy11 = dataTableProxy('ex_df11')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df11_cell_edit, {
+      info = input$ex_df11_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df11)
+
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df11[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df11[i,j]))
+
+        x$ex_df11 <- x$ex_df11  %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy11, x$ex_df11, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df11[i,j] <-(DT::coerceValue(v, x$ex_df11[i,j]))
+
+        x$ex_df11 <- x$ex_df11 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy11, x$ex_df11, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+
+
+    output$frutiferas <- renderInfoBox({
+
+      frutiferas_valor <-  x$ex_df11  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`))
+
+     frutiferas_valor%>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Frutiferas",
+                 icon = icon("lemon"),
+                 color = "green")
+
+
+
+
+    })
+
+
+    # Ornamentais
+
+    observeEvent(input$saveBtn_ex_df12,{
+      salvar_tabela(x$ex_df12, agrarias_clone(), "agrarias")
+    })
+
+    x$ex_df12 <<-  agrarias %>%
+      filter(parte_matriz == "ornamentais") %>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "ornamentais")
+
+
+
+    # output$ex_df12 <-  tabela_dinamica(x$ex_df12, add = "add_btn10", colunas = 10, "delete_btn10" )
+    output$ex_df12 <-  tabela_dinamica(x$ex_df12)
+
+
+    proxy12 = dataTableProxy('ex_df12')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df12_cell_edit, {
+      info = input$ex_df12_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df12)
+
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df12[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df12[i,j]))
+
+        x$ex_df12 <- x$ex_df12  %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy12, x$ex_df12, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df12[i,j] <-(DT::coerceValue(v, x$ex_df12[i,j]))
+
+        x$ex_df12 <- x$ex_df12%>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy12, x$ex_df12, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+
+
+    output$ornamentais <- renderInfoBox({
+
+       ornamentais_valor <-  x$ex_df12 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`))
+
+
+       ornamentais_valor %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Ornamentais",
+                 icon = icon("coins"),
+                 color = "green")
+
+
+
+
+    })
+
+
+    #ROÇA
+
+    observeEvent(input$saveBtn_ex_df13,{
+      salvar_tabela(x$ex_df13, roca, "roca")
+    })
+
+    x$ex_df13 <<- roca %>%
+      mutate("Valor líquido" = round((Quantidade*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`)/12),2))%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Unitário Bruto (R$)`, `% Custos de produção` ,`Valor líquido`, parte_matriz ,primary_key)
+
+
+
+
+    # output$ex_df13 <-  tabela_dinamica(x$ex_df13, add = "add_btn11", colunas = 8, "delete_btn11" )
+    output$ex_df13 <-  tabela_dinamica(x$ex_df13)
+
+
+    proxy13 = dataTableProxy('ex_df13')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df13_cell_edit, {
+      info = input$ex_df13_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df13)
+
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df13[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df13[i,j]))
+
+        x$ex_df13 <- x$ex_df13  %>%
+        mutate("Valor líquido" = round((Quantidade*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`)/12),2))%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy13, x$ex_df13, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df13[i,j] <-(DT::coerceValue(v, x$ex_df13[i,j]))
+
+        x$ex_df13 <- x$ex_df13 %>%
+          mutate("Valor líquido" = round((Quantidade*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`)/12),2))%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy13, x$ex_df13, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$roca <- renderInfoBox({
+
+      roca_valor <- x$ex_df13 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor líquido" = round((Quantidade*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`)/12),2))%>%
+        summarise(plus(`Valor líquido`))
+
+         roca_valor %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Roca",
+                 icon = icon("carrot"),
+                 color = "green")
+
+
+    })
+
+
+
+    ##CONSORCIO
+#Falta deixar as células numericas editaveis e adicionar nf-tr
+
+    observeEvent(input$saveBtn_ex_df21,{
+      salvar_tabela(x$ex_df21, consorcio, "consorcio")
+    })
+
+  x$ex_df21 <<- consorcio %>%
+    group_by(NF, qual_principal) %>%
+    mutate(area_total_consorcio = 1.2*area_consorcio_final) %>%
+    mutate("area_cultivo" = case_when(qual_principal == "Principal" ~ 0.6*area_total_consorcio,
+                                      TRUE ~ (0.4*area_total_consorcio)/ (ifelse(length(qual_principal) == 1, 1,length(qual_principal) -1))
+    )) %>%
+    mutate(`Valor liquido` = round((area_cultivo*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`))/12,2)) %>%
+    ungroup()
+
+    # output$ex_df21 <-  tabela_dinamica(x$ex_df21, add = "add_btn13", colunas = 16, "delete_btn13" )
+    output$ex_df21 <-  tabela_dinamica(x$ex_df21)
+
+    proxy21 = dataTableProxy('ex_df21')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df21_cell_edit, {
+      info = input$ex_df21_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df21)
+
+
+      if(j %in% c(5,12)){
+
+
+        x$ex_df21[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df21[i,j]))
+
+        x$ex_df21 <- x$ex_df21  %>%
+          group_by(NF, qual_principal) %>%
+          mutate(area_total_consorcio = 1.2*area_consorcio_final) %>%
+          mutate("area_cultivo" = case_when(qual_principal == "Principal" ~ 0.6*area_total_consorcio,
+                                            TRUE ~ (0.4*area_total_consorcio)/ (ifelse(length(qual_principal) == 1, 1,length(qual_principal) -1))
+          )) %>%
+          mutate(`Valor liquido` = round((area_cultivo*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`))/12,2)) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy21, x$ex_df21, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df21[i,j] <-(DT::coerceValue(v, x$ex_df21[i,j]))
+
+        x$ex_df21 <- x$ex_df21%>%
+          group_by(NF, qual_principal) %>%
+          mutate(area_total_consorcio = 1.2*area_consorcio_final) %>%
+          mutate("area_cultivo" = case_when(qual_principal == "Principal" ~ 0.6*area_total_consorcio,
+                                            TRUE ~ (0.4*area_total_consorcio)/ (ifelse(length(qual_principal) == 1, 1,length(qual_principal) -1))
+          )) %>%
+          mutate(`Valor liquido` = round((area_cultivo*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`))/12,2)) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy21, x$ex_df21, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$consorcio <- renderInfoBox({
+
+      x$ex_df21 %>%
+        ungroup() %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate(`Valor Total` = round((area_cultivo*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`))/12,2)) %>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Consórcio",
+                 icon = icon("carrot"),
+                 color = "green")
+
+
+    })
+
+
+
+
+    #PASTAGEM
+
+    observeEvent(input$saveBtn_ex_df14,{
+      salvar_tabela(x$ex_df14, agrarias_clone(), "agrarias")
+    })
+
+    x$ex_df14 <<-  agrarias %>%
+      filter(parte_matriz == "pastagem")%>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "pastagem")
+
+    # output$ex_df14 <-  tabela_dinamica(x$ex_df14, add = "add_btn12", colunas = 10, "delete_btn12" )
+    output$ex_df14 <-  tabela_dinamica(x$ex_df14)
+
+
+    proxy14 = dataTableProxy('ex_df14')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df14_cell_edit, {
+      info = input$ex_df14_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df14)
+
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df14[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df14[i,j]))
+
+        x$ex_df14 <- x$ex_df14 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy14, x$ex_df14, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df14[i,j] <-(DT::coerceValue(v, x$ex_df14[i,j]))
+
+        x$ex_df14 <- x$ex_df14 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy14, x$ex_df14, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+
+    output$pastagem <- renderInfoBox({
+
+      x$ex_df14 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Pastagem",
+                 icon = icon("leaf"),
+                 color = "green")
+
+
+    })
+
+    observeEvent(input$saveBtn_ex_df014,{
+      salvar_tabela(x$ex_df014, agrarias_clone(), "agrarias")
+    })
+
+    x$ex_df014 <<-  agrarias %>%
+      filter(parte_matriz == "forrageira")%>%
+      mutate("Valor liquido" = round((Quantidade*`Valor Item`*(1-`% Custos de produção`)/12),2))%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "forrageira")
+
+    # output$ex_df014 <-  tabela_dinamica(x$ex_df014, add = "add_btn12", colunas = 10, "delete_btn12" )
+    output$ex_df014 <-  tabela_dinamica(x$ex_df014)
+
+
+    proxy014 = dataTableProxy('ex_df014')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df014_cell_edit, {
+      info = input$ex_df014_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df014)
+
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df014[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df014[i,j]))
+
+        x$ex_df014 <- x$ex_df014 %>%
+          mutate("Valor liquido" = round((Quantidade*`Valor Item`*(1-`% Custos de produção`)/12),2))%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy014, x$ex_df014, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df014[i,j] <-(DT::coerceValue(v, x$ex_df014[i,j]))
+
+        x$ex_df014 <- x$ex_df014 %>%
+          mutate("Valor liquido" = round((Quantidade*`Valor Item`*(1-`% Custos de produção`)/12),2))%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy014, x$ex_df014, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+
+
+
+    output$forrageira <- renderInfoBox({
+
+      x$ex_df014 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        )))  %>%
+        # mutate("Valor líquido" = round((Quantidade*`Valor Item`*(1-`% Custos de produção`)/12),2))%>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Forrageira",
+                 icon = icon("leaf"),
+                 color = "green")
+
+
+    })
+
+
+    output$total_plantas <- renderInfoBox({
+
+      agrarias %>%
+        filter(str_detect(parte_matriz, "pastagem|horta|frutiferas|ornamentais|roca")) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate(total =Quantidade*`Valor Item` ) %>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Total Plantas",
+                 icon = icon("seedling"),
+                 color = "blue")
+
+
+    })
+
+
+
+    #PECUARIA
+
+    observeEvent(input$saveBtn_ex_df15,{
+      salvar_tabela(x$ex_df15, agrarias_clone(), "agrarias")
+    })
+
+
+
+    x$ex_df15 <<-  agrarias %>%
+      filter(parte_matriz == "pecuaria") %>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "pecuaria")
+
+    # output$ex_df15 <-  tabela_dinamica(x$ex_df15, add = "add_btn14", colunas = 10, "delete_btn14" )
+    output$ex_df15 <-  tabela_dinamica(x$ex_df15)
+
+
+    proxy15 = dataTableProxy('ex_df15')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df15_cell_edit, {
+      info = input$ex_df15_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df15)
+
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df15[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df15[i,j]))
+
+        x$ex_df15 <- x$ex_df15 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy15, x$ex_df15, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df15[i,j] <-(DT::coerceValue(v, x$ex_df15[i,j]))
+
+        x$ex_df15 <- x$ex_df15 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy15, x$ex_df15, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$pecuaria <- renderInfoBox({
+
+      x$ex_df15 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Pecuaria",
+                 icon = icon("piggy-bank"),
+                 color = "yellow")
+
+
+    })
+
+
+    #AQUICULTURA
+
+    observeEvent(input$saveBtn_ex_df16,{
+      salvar_tabela(x$ex_df16, agrarias_clone(), "agrarias")
+    })
+
+    x$ex_df16 <<-  agrarias %>%
+      filter(parte_matriz == "aquicultura") %>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "aquicultura")
+
+    # output$ex_df16 <-  tabela_dinamica(x$ex_df16, add = "add_btn15", colunas = 10, "delete_btn15" )
+    output$ex_df16 <-  tabela_dinamica(x$ex_df16)
+
+
+    proxy16 = dataTableProxy('ex_df16')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df16_cell_edit, {
+      info = input$ex_df16_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      print(x$ex_df16)
+
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df16[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df16[i,j]))
+
+        x$ex_df16 <- x$ex_df16  %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy16, x$ex_df16, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df16[i,j] <-(DT::coerceValue(v, x$ex_df16[i,j]))
+
+        x$ex_df16 <- x$ex_df16 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy16, x$ex_df16, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$aquicultura <- renderInfoBox({
+
+      x$ex_df16 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Aquicultura",
+                 icon = icon("fish"),
+                 color = "yellow")
+
+
+    })
+
+
+
+
+    #AVICULTURA
+
+    observeEvent(input$saveBtn_ex_df17,{
+      salvar_tabela(x$ex_df17, agrarias_clone(), "agrarias")
+    })
+
+    x$ex_df17 <<-  agrarias %>%
+      filter(parte_matriz == "avicultura") %>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "avicultura")
+
+    # output$ex_df17 <-  tabela_dinamica(x$ex_df17, add = "add_btn16", colunas = 10, "delete_btn16" )
+    output$ex_df17 <-  tabela_dinamica(x$ex_df17)
+
+
+    proxy17 = dataTableProxy('ex_df17')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df17_cell_edit, {
+      info = input$ex_df17_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df17[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df17[i,j]))
+
+        x$ex_df17 <- x$ex_df17  %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy17, x$ex_df17, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df17[i,j] <-(DT::coerceValue(v, x$ex_df17[i,j]))
+
+        x$ex_df17 <- x$ex_df17 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy17, x$ex_df17, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$avicultura <- renderInfoBox({
+
+      x$ex_df17 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`))%>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Avicultura",
+                 icon = icon("fish"),
+                 color = "yellow")
+
+
+
+    })
+
+
+
+
+    #apicultura
+
+    observeEvent(input$saveBtn_ex_df18,{
+      salvar_tabela(x$ex_df18, agrarias_clone(), "agrarias")
+    })
+
+    x$ex_df18 <<-  agrarias %>%
+      filter(parte_matriz == "apicultura") %>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "apicultura")
+
+    # output$ex_df18<-  tabela_dinamica(x$ex_df18, add = "add_btn17", colunas = 10, "delete_btn17" )
+    output$ex_df18<-  tabela_dinamica(x$ex_df18)
+
+
+    proxy18 = dataTableProxy('ex_df18')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df18_cell_edit, {
+      info = input$ex_df18_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df18[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df18[i,j]))
+
+        x$ex_df18 <- x$ex_df18  %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy18, x$ex_df18, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df18[i,j] <-(DT::coerceValue(v, x$ex_df18[i,j]))
+
+        x$ex_df18 <- x$ex_df18 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy18, x$ex_df18, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$apicultura <- renderInfoBox({
+      x$ex_df18 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Apicultura",
+                 icon = icon("fish"),
+                 color = "yellow")
+
+
+    })
+
+
+
+
+    #INSUMO ANIMAL
+
+    observeEvent(input$saveBtn_ex_df19,{
+      salvar_tabela(x$ex_df19, agrarias_clone(), "agrarias")
+    })
+
+    x$ex_df19 <<-  agrarias %>%
+      filter(parte_matriz == "insumos") %>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "insumos")
+
+
+    # output$ex_df19<-  tabela_dinamica(x$ex_df19, add = "add_btn18", colunas = 10, "delete_btn18" )
+    output$ex_df19<-  tabela_dinamica(x$ex_df19)
+
+
+    proxy19 = dataTableProxy('ex_df19')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df19_cell_edit, {
+      info = input$ex_df19_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df19[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df19[i,j]))
+
+        x$ex_df19 <- x$ex_df19  %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy19, x$ex_df19, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df19[i,j] <-(DT::coerceValue(v, x$ex_df19[i,j]))
+
+        x$ex_df19 <- x$ex_df19 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy19, x$ex_df19, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+
+    output$insumos_animais <- renderInfoBox({
+
+      x$ex_df19 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate(total =Quantidade*`Valor Item` ) %>%
+        summarise(plus(`Valor liquido`))%>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Insumo Animal",
+                 icon = icon("fish"),
+                 color = "yellow")
+
+
+
+    })
+
+
+
+
+    #PRODUÇÃO ANIMAL
+
+    observeEvent(input$saveBtn_ex_df20,{
+      salvar_tabela(x$ex_df20, agrarias_clone(), "agrarias")
+    })
+
+    x$ex_df20 <<-  agrarias %>%
+      filter(parte_matriz == "producao_animal") %>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+      relocate(NF, `NF-TR`, Item , Quantidade, `Unidada/Medida`,
+               `Valor Item`, `% Custos de produção` , parte_matriz ,primary_key)%>% linhas_em_branco() %>% mutate(parte_matriz = "producao_animal")
+
+    # output$ex_df20<-  tabela_dinamica(x$ex_df20, add = "add_btn19", colunas = 10, "delete_btn19" )
+    output$ex_df20<-  tabela_dinamica(x$ex_df20)
+
+
+    proxy20 = dataTableProxy('ex_df20')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df20_cell_edit, {
+      info = input$ex_df20_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(4,6,7)){
+
+
+        x$ex_df20[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df20[i,j]))
+
+        x$ex_df20 <- x$ex_df20  %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy20, x$ex_df20, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df20[i,j] <-(DT::coerceValue(v, x$ex_df20[i,j]))
+
+        x$ex_df20 <- x$ex_df20 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy20, x$ex_df20, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$producao_animal <- renderInfoBox({
+
+      x$ex_df20 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Producao Animal",
+                 icon = icon("coins"),
+                 color = "yellow")
+
+
+
+
+    })
+
+
+    output$total_animais <- renderInfoBox({
+
+      agrarias %>%
+        filter(str_detect(parte_matriz, "pecuaria|aquicultura|avicultura|apicultura|animais insumo|producao animal")) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Total Animais",
+                 icon = icon("paw"),
+                 color = "yellow")
+
+
+
+
+    })
+
+
+    # output$total_agrarias <- renderInfoBox({
+    #
+    #   agrarias %>%
+    #     filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+    #     ))) %>%
+    #     mutate(total =Quantidade*`Valor Item` ) %>%
+    #     summarise(plus(total)) %>%
+    #     prettyNum(big.mark = ",", decimal.mark = ".") %>%
+    #     currency(symbol = "R$") %>%
+    #     valueBox(subtitle = "Valor Total Agrarias",
+    #              icon = icon("dollar"),
+    #              color = "red")
+    # })
+    #
+
+    # Danos Morais
+
+     x$ex_df22 <<-  danos_morais %>%
+      mutate(`VALOR EM REAIS` = case_when(`DANOS SOFRIDOS` == "Sim" ~ VALOR,
+                                          `DANOS SOFRIDOS` == 'Não' ~ 0
+      ))
+
+     observeEvent(input$saveBtn_ex_df22,{
+       salvar_tabela(x$ex_df22, danos_morais, "danos_morais")
+     })
+
+
+
+    proxy22 = dataTableProxy('ex_df22')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df22_cell_edit, {
+      info = input$ex_df22_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+      {
+        x$ex_df22[i,j] <-DT::coerceValue(v, x$ex_df22[i,j])
+        x$ex_df22 <- x$ex_df22 %>%
+          mutate(`VALOR EM REAIS` = case_when(`DANOS SOFRIDOS` == "Sim" ~ VALOR,
+                                              `DANOS SOFRIDOS` == 'Não' ~ 0
+          )) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy22, x$ex_df22, resetPaging = FALSE)  # important
+      }
+    })
+
+
+#
+#     output$ex_df22 <-
+#       DT::renderDataTable ({
+#         datatable(x$ex_df22 %>%filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))),
+#                   filter = list(position = 'top', clear = TRUE, plain = TRUE) ,
+#                   extensions =  c('Buttons','AutoFill','FixedHeader', 'KeyTable','ColReorder'),
+#                   options = list(scrollX = TRUE,
+#                                  keys = TRUE, colReorder = list(realtime = FALSE),
+#                                  fixedHeader = TRUE, autoFill = list(focus = 'click', horizontal = FALSE) ,
+#                                  autoWidth=TRUE, pageLength =5 ,editable = TRUE,
+#                                  lengthMenu = list(c(5, 50, -1), c('5', '50', 'All')),  dom = 't',buttons =list(
+#                                    c('colvis','pdf','excel'),
+#                                    list(
+#                                      extend = "collection",
+#                                      text = 'Mostrar Tudo'))))
+#       }, server = FALSE)
+
+    output$ex_df22<-  tabela_dinamica(x$ex_df22)
+
+
+    output$ex_df27 <- DT::renderDataTable(resultado_ex_df27())
+
+
+    resultado_ex_df27 <- reactive({  x$ex_df22 %>%
+                                                      filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))) %>%
+                                                      ungroup() %>%
+                                                      select(2,7) %>%
+                                                      group_by(NF) %>%
+                                                      summarise("TOTAL POR ATINGIDO" = sum(`VALOR EM REAIS`)) %>%
+                                                      mutate(`TOTAL POR ATINGIDO` = ifelse(`TOTAL POR ATINGIDO` < 10000,10000, `TOTAL POR ATINGIDO`))})
+
+
+    observeEvent(input$saveBtn_ex_df27,{
+      salvar_tabela(resultado_ex_df27()
+                    , NA, "final_morais_indv")
+    })
+
+
+    output$total_danos_morais <- renderInfoBox({
+
+      x$ex_df22 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        summarise(plus(`VALOR EM REAIS`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Total Danos Morais",
+                 icon = icon("paw"),
+                 color = "yellow")
+
+
+
+
+    })
+
+     # output$Danos_Morais_cadastro <-
+     #   DT::renderDataTable ({datatable(ref_cadastro %>%filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))),
+     #               options = list(scrollX = TRUE,
+     #                              keys = TRUE, colReorder = list(realtime = FALSE),
+     #                              fixedHeader = TRUE, autoFill = list(focus = 'click', horizontal = FALSE) ,
+     #                              autoWidth=TRUE, pageLength =5 ,editable = TRUE,
+     #                              lengthMenu = list(c(5, 50, -1), c('5', '50', 'All')),  dom = 'lBfrtip',buttons =list(
+     #                                c('colvis','pdf','excel'),
+     #                                list(
+     #                                  extend = "collection",
+     #                                  text = 'Mostrar Tudo')))
+     #               , callback = JS(callback_teste("add_btn22", 5, "delete_btn22")))
+     #   }, server = FALSE)
+
+    output$Danos_Morais_cadastro <- renderDT({
+      DT::datatable(
+        ref_cadastro %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))) , plugins = "ellipsis",
+        filter = list(position = 'top', clear = TRUE, plain = TRUE) ,
+        extensions =  c('Buttons','AutoFill','FixedHeader', 'KeyTable','ColReorder'), editable = list(
+          target = 'cell'
+        ), selection = "single",escape = FALSE ,
+        options = list(scrollX = FALSE,
+                       keys = TRUE, colReorder = list(realtime = FALSE),
+                       fixedHeader = TRUE, autoFill = list(focus = 'click', horizontal = FALSE) ,
+                       autoWidth=TRUE, editable = FALSE,
+                       lengthMenu = list(c(1, 3, 7, 10, -1), c('1', '3', '7', '10', 'Todos')),  dom = 'lBfrtip',buttons =                                                                                                                 list(
+                         c('colvis','pdf','excel'),
+                         list(
+                           extend = "collection",
+                           text = 'Mostrar Tudo',
+                           action = DT::JS("function ( e, dt, node, config ) { dt.page.len(-1);
+                                                       dt.ajax.reload();
+        }"))))
+      )
+    })
+
+    # output$Danos_Morais_tomada_de_termo <- tabela_dinamica(ref_tomada_de_termo , add = "add_btn21", colunas = 5, "delete_btn21" )%>% formatStyle('perguntas',colnames(ref_tomada_de_termo),
+    #                                                                                                                                              backgroundColor = styleEqual(c("SAÚDE FÍSICA E PSICOLÓGICA"
+    #                                                                                                                                                                             ,"CONVIVÊNCIA COM AMIGOS E VIZINHOS"
+    #                                                                                                                                                                             ,"CONVIVÊNCIA FAMILIAR"
+    #                                                                                                                                                                             ,"ATIVIDADES DE LAZER"
+    #                                                                                                                                                                             ,"ROTINA E COTIDIANO"
+    #                                                                                                                                                                             ,"RELAÇÃO COM A NATUREZA"
+    #                                                                                                                                                                             ,"DIA DO ACIONAMENTO"
+    #                                                                                                                                                                             ,"RELAÇÃO COM ANIMAIS DE ESTIMAÇÃO"
+    #                                                                                                                                                                             ,"TRABALHO E RENDA")
+    #                                                                                                                                                                           , c('lightgreen'
+    #                                                                                                                                                                               ,'lightgreen'
+    #                                                                                                                                                                               ,'lightgreen'
+    #                                                                                                                                                                               ,'lightgreen'
+    #                                                                                                                                                                               ,'lightgreen'
+    #                                                                                                                                                                               ,'lightgreen'
+    #                                                                                                                                                                               ,'lightgreen'
+    #                                                                                                                                                                               ,'lightgreen'
+    #                                                                                                                                                                               ,'lightgreen')))
+
+    output$Danos_Morais_tomada_de_termo <- DT::renderDataTable({
+      DT::datatable(
+        ref_tomada_de_termo %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        , plugins = "ellipsis",
+        filter = list(position = 'top', clear = TRUE, plain = TRUE) ,
+        extensions =  c('Buttons','AutoFill','FixedHeader', 'KeyTable','ColReorder'), editable = list(
+          target = 'cell'
+        ), selection = "single",escape = FALSE ,
+        options = list(scrollX = FALSE,
+                       keys = TRUE, colReorder = list(realtime = FALSE),
+                       fixedHeader = TRUE, autoFill = list(focus = 'click', horizontal = FALSE) ,
+                       autoWidth=TRUE, editable = FALSE,
+                       lengthMenu = list(c(1, 3, 7, 10, -1), c('1', '3', '7', '10', 'Todos')),  dom = 'lBfrtip',buttons =                                                                                                                 list(
+                         c('colvis','pdf','excel'),
+                         list(
+                           extend = "collection",
+                           text = 'Mostrar Tudo',
+                           action = DT::JS("function ( e, dt, node, config ) { dt.page.len(-1);
+                                                       dt.ajax.reload();
+        }"))))
+
+        ) %>% formatStyle(
+          'perguntas',
+          colnames(ref_tomada_de_termo),
+          backgroundColor = styleEqual(c("SAÚDE FÍSICA E PSICOLÓGICA"
+                                            ,"CONVIVÊNCIA COM AMIGOS E VIZINHOS"
+                                            ,"CONVIVÊNCIA FAMILIAR"
+                                            ,"ATIVIDADES DE LAZER"
+                                            ,"ROTINA E COTIDIANO"
+                                            ,"RELAÇÃO COM A NATUREZA"
+                                            ,"DIA DO ACIONAMENTO"
+                                            ,"RELAÇÃO COM ANIMAIS DE ESTIMAÇÃO"
+                                            ,"TRABALHO E RENDA"
+                                            )
+                                          , c('lightgreen'
+                                              ,'lightgreen'
+                                              ,'lightgreen'
+                                              ,'lightgreen'
+                                              ,'lightgreen'
+                                              ,'lightgreen'
+                                              ,'lightgreen'
+                                              ,'lightgreen'
+                                              ,'lightgreen'
+                                              )
+                                          )
+          #,fontWeight = 'bold'
+        )
+    })
+
+    #Danos Renda
+    # output$Danos_renda_cadastro <- tabela_dinamica(ref_renda, add = "add_btn26", colunas = 5, "delete_btn26" )
+    output$Danos_renda_cadastro <- tabela_dinamica(ref_renda)
+
+
+
+#### Renda
+
+    observeEvent(input$saveBtn_ex_df26,{
+      salvar_tabela(x$ex_df26, renda_clone(), "renda")
+    })
+
+    x$ex_df26 <<-  renda %>%
+      filter(topico == "Pessoa Física") %>%
+      filter(parte == "Renda Individual") %>%
+      filter(!str_detect(perguntas, "Custos processuais contra empregador que não pagou direitos trabalhistas"))
+
+    # output$ex_df26<-  tabela_dinamica(x$ex_df26, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df26<-  tabela_dinamica(x$ex_df26)
+
+
+    proxy26 = dataTableProxy('ex_df26')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df26_cell_edit, {
+      info = input$ex_df26_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df26[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df26[[6]][i]))
+
+      x$ex_df26 <- x$ex_df26  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy26, x$ex_df26, resetPaging = FALSE)  # important
+
+    })
+
+    output$renda_pessoa_fisica <- renderDataTable({
+
+
+      tabela <- retornar_tabela_completa(paste0(data_paebm_value()), paste0(data_acordo_value()))
+      correcao <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_acordo_value())), "month")) %>%
+        select(2) %>%
+        unlist()
+      presente <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_paebm_value())), "month")  %m+% months(47)) %>%
+        select(3) %>%
+        unlist()
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+
+      total1 <- x$ex_df26 %>%
+         select(-primary_key) %>%
+         mutate(valores=as.numeric(valores)) %>%
+         mutate(valores=case_when(
+           is.character(valores) ~ 0
+           ,is.na(valores) ~ 0
+           ,TRUE ~valores
+         )) %>%
+         pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+         group_by(NF) %>%
+         mutate(
+           lucro_anterior = `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade anterior ao acionamento do PAEBM`
+         ) %>%
+         mutate(
+           lucro_posterior = `Valor da renda mensal bruta posterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade posterior ao acionamento do PAEBM`
+         ) %>%
+         mutate(
+           `Percentual da perda de renda líquida` = (1 - lucro_posterior / lucro_anterior)
+         ) %>%
+         summarise(
+           "Renda líquida perdida ao mês"  = (
+             `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade anterior ao acionamento do PAEBM`
+           ) * `Percentual da perda de renda líquida`
+         ) %>%
+         mutate("Valor acumulado sem correção e sem juros"  = `Renda líquida perdida ao mês` * 48) %>%
+         mutate("Renda acumulada corrigida a Valor Futuro (IPCA+2%a.a.)" = `Renda líquida perdida ao mês` * correcao) %>%
+         mutate("Renda acumulada corrigida a Valor Presente (IPCA+2%a.a.)" = `Renda líquida perdida ao mês` * presente) %>%
+         mutate("Total devido referente à perda de renda"  = `Renda líquida perdida ao mês` * (presente + correcao))  %>%
+         ungroup() %>%
+         pivot_longer(!NF,
+                      names_to =  "perguntas",
+                      values_to =  "valores"
+         )
+
+       datatable(total1%>%
+                   filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+           )
+    })
+
+    observeEvent(input$saveBtn_ex_df40,{
+      salvar_tabela(x$ex_df40, renda_clone(), "renda")
+    })
+
+    x$ex_df40 <<-   renda %>%
+      filter(topico == "Pessoa Física") %>%
+      filter(parte == "Infraestrutura e Estoques")%>% distinct()
+
+    # output$ex_df40<-  tabela_dinamica(x$ex_df40, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df40<-  tabela_dinamica(x$ex_df40)
+
+
+    proxy40 = dataTableProxy('ex_df40')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df40_cell_edit, {
+      info = input$ex_df40_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df40[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df40[[6]][i]))
+
+      x$ex_df40 <- x$ex_df40  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy40, x$ex_df40, resetPaging = FALSE)  # important
+
+    })
+    output$infraestrutura <- renderDataTable({
+
+
+      tabela <- retornar_tabela_completa(paste0(data_paebm_value()), paste0(data_acordo_value()))
+      correcao <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_acordo_value())), "month")) %>%
+        select(2) %>%
+        unlist()
+      presente <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_paebm_value())), "month")  %m+% months(47)) %>%
+        select(3) %>%
+        unlist()
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+
+    total2 <-  x$ex_df40 %>%
+        select(-primary_key) %>%
+        filter(topico == "Pessoa Física") %>%
+        filter(parte == "Infraestrutura e Estoques") %>%
+        mutate(valores=as.numeric(valores)) %>%
+        mutate(valores=case_when(
+          is.character(valores) ~ 0
+          ,is.na(valores) ~ 0
+          ,TRUE ~valores
+        )) %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        group_by(NF) %>%
+        mutate(
+          "Total devido referente à infraestrutura e estoques para autônomos" = `Valor da infraestrutura (equipamentos, máquinas, etc)` +
+            `Valor do estoque`) %>%
+        ungroup() %>%
+        select(c(1,6)) %>%
+        pivot_longer(!NF,
+                     names_to =  "perguntas",
+                     values_to =  "valores"
+        )
+
+
+       datatable(total2%>%
+         filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+       )
+    })
+
+
+
+    observeEvent(input$saveBtn_ex_df42,{
+      salvar_tabela(x$ex_df42, renda_clone(), "renda")
+    })
+    x$ex_df42 <<-     x$ex_df42 <<-  renda %>%
+      filter(topico == "Pessoa Física") %>%
+      filter(parte == "Tipo de Trabalho") %>%
+      distinct()
+
+      proxy42 = dataTableProxy('ex_df42')
+
+      output$ex_df42<-  tabela_dinamica(x$ex_df42)
+
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df42_cell_edit, {
+      info = input$ex_df42_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df42[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df40[[6]][i]))
+
+      {
+        x$ex_df42 <- x$ex_df42 %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy42, x$ex_df42, resetPaging = FALSE)  # important
+      }
+
+    })
+    observeEvent(input$saveBtn_ex_df42,{
+      salvar_tabela(x$ex_df42, renda_clone(), "renda")
+    })
+
+
+
+    observeEvent(input$saveBtn_ex_df43,{
+      salvar_tabela(x$ex_df43, renda_clone(), "renda")
+    })
+
+    x$ex_df43 <<-  renda %>%
+      filter(topico == "Pessoa Jurídica") %>%
+      filter(parte == "Renda Individual") %>%
+      filter(!str_detect(perguntas, "Custos processuais contra empregador que não pagou direitos trabalhistas"))
+
+    # output$ex_df43<-  tabela_dinamica(x$ex_df43, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df43<-  tabela_dinamica(x$ex_df43)
+
+
+    proxy43 = dataTableProxy('ex_df43')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df43_cell_edit, {
+      info = input$ex_df43_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df43[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df43[[6]][i]))
+
+      x$ex_df43 <- x$ex_df43  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy43, x$ex_df43, resetPaging = FALSE)  # important
+
+    })
+
+
+
+    x$ex_df026 <<-  renda %>%
+      filter(topico == "Pessoa Física") %>%
+      filter(parte == "Renda Individual") %>%
+      filter(str_detect(perguntas, "Custos processuais contra empregador que não pagou direitos trabalhistas"))
+
+    # output$ex_df026<-  tabela_dinamica(x$ex_df026, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df026<-  tabela_dinamica(x$ex_df026)
+
+
+    proxy026 = dataTableProxy('ex_df026')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df026_cell_edit, {
+      info = input$ex_df026_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df026[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df026[[6]][i]))
+
+      x$ex_df026 <- x$ex_df026  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy026, x$ex_df026, resetPaging = FALSE)  # important
+
+    })
+
+    observeEvent(input$saveBtn_ex_df026,{
+      salvar_tabela(x$ex_df026, renda_clone(), "renda")
+    })
+
+
+
+
+    output$autonomo <- renderDataTable({
+
+
+      tabela <- retornar_tabela_completa(paste0(data_paebm_value()), paste0(data_acordo_value()))
+      correcao <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_acordo_value())), "month")) %>%
+        select(2) %>%
+        unlist()
+      presente <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_paebm_value())), "month")  %m+% months(47)) %>%
+        select(3) %>%
+        unlist()
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+
+
+
+      autonomo <-  x$ex_df26 %>%
+        select(-primary_key) %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        select(NF, `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`) %>%
+        group_by(NF) %>%
+        mutate("Dano ao trabalhador autônomo" = case_when(`Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` <= 1830 ~ (acordo*0.0816*
+                                                                                                                                               `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`*1.2),
+                                                          `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` <= 3050.52 ~ (acordo*0.0916*
+                                                                                                                                                  `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`*1.2),
+                                                          `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` <= 6101.06 ~ (acordo*0.1116*
+                                                                                                                                                  `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`*1.2),
+                                                          `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` > 6101.06 ~ (acordo*0.1169*
+                                                                                                                                                 `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`*1.2),
+                                                          TRUE ~ 0)) %>%
+        ungroup() %>%
+        select(NF,`Dano ao trabalhador autônomo`) %>%
+        distinct() %>%
+        left_join(x$ex_df42 %>%
+                    select(2,6)%>% distinct()) %>%
+        mutate(`Dano ao trabalhador autônomo`= case_when(`valores` == 1 ~ `Dano ao trabalhador autônomo`,
+                                                         TRUE ~ 0),
+               `valores` = case_when(`valores` == 1 ~ "Autônomo",
+                                     TRUE ~ "Não se Aplica"))
+
+      custo_processuais <-  x$ex_df026 %>%
+        select(NF, valores) %>%
+        rename("Custos processuais contra empregador que não pagou direitos trabalhistas" = valores)
+
+      resultado_automo <- autonomo %>%
+        left_join(custo_processuais) %>%
+        mutate("Danos relativos à contribuição previdenciária e custos processuais" = `Dano ao trabalhador autônomo` + `Custos processuais contra empregador que não pagou direitos trabalhistas` ) %>%
+        relocate(NF, valores)
+
+      datatable(resultado_automo%>%
+                  filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))))
+
+})
+
+    observeEvent(input$saveBtn_ex_df41,{
+      salvar_tabela(x$ex_df41, renda_clone(), "renda")
+    })
+
+    x$ex_df41 <<-  renda %>%
+      filter(parte == "Dívidas Trabalhistas") %>%
+      filter(topico == "Pessoa Física")
+
+    # output$ex_df41<-  tabela_dinamica(x$ex_df41, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df41<-  tabela_dinamica(x$ex_df41)
+
+
+    proxy41 = dataTableProxy('ex_df41')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df41_cell_edit, {
+      info = input$ex_df41_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df41[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df41[[6]][i]))
+
+      x$ex_df41 <- x$ex_df41  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy41, x$ex_df41, resetPaging = FALSE)  # important
+
+    })
+
+    output$trabalho <- renderDataTable({
+
+     datatable(
+        x$ex_df41 %>%
+          filter(topico == "Pessoa Física") %>%
+          group_by(NF) %>%
+          summarise(valores = sum(valores)) %>%
+          mutate(perguntas = "Total - Dívidas trabalhistas  (custos com demissões e afins)")%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      )
+    })
+
+
+
+
+    observeEvent(input$saveBtn_ex_df29,{
+      salvar_tabela(x$ex_df29, renda_divida_anterior, "renda_divida_anterior")
+    })
+
+    x$ex_df29 <<-  renda_divida_anterior
+
+    # output$ex_df29<-  tabela_dinamica(x$ex_df29, add = "add_btn24", colunas = 10, "delete_btn24" )
+    output$ex_df29<-  tabela_dinamica(x$ex_df29)
+
+
+    proxy29 = dataTableProxy('ex_df29')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df29_cell_edit, {
+      info = input$ex_df29_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(4,5)){
+
+
+        x$ex_df29[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df29[i,j]))
+
+        x$ex_df29 <- x$ex_df29  %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy29, x$ex_df29, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df29[i,j] <-(DT::coerceValue(v, x$ex_df29[i,j]))
+
+        x$ex_df29 <- x$ex_df29 %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy29, x$ex_df29, resetPaging = FALSE)  # important
+
+      }
+    })
+
+    #pessoa juridica
+
+
+
+
+    output$renda_pessoa_juridica <- renderDataTable({
+
+      tabela <- retornar_tabela_completa(paste0(data_paebm_value()), paste0(data_acordo_value()))
+      correcao <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_acordo_value())), "month")) %>%
+        select(2) %>%
+        unlist()
+      presente <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_paebm_value())), "month")  %m+% months(47)) %>%
+        select(3) %>%
+        unlist()
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+
+      total1 <- x$ex_df43 %>%
+        select(-primary_key) %>%
+        mutate(valores=as.numeric(valores)) %>%
+        mutate(valores=case_when(
+          is.character(valores) ~ 0
+          ,is.na(valores) ~ 0
+          ,TRUE ~valores
+        )) %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        group_by(NF) %>%
+        mutate(
+          lucro_anterior = `Valor do faturamento bruto anterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade anterior ao acionamento do PAEBM em reais`
+        ) %>%
+        mutate(
+          lucro_posterior = `Valor do faturamento bruto posterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade posterior ao acionamento do PAEBM em reais`
+        ) %>%
+        mutate(
+          `Percentual da perda de renda líquida` = (1 - lucro_posterior / lucro_anterior)
+        ) %>%
+        summarise(
+          "Renda líquida perdida ao mês"  = (
+            `Valor do faturamento bruto anterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade anterior ao acionamento do PAEBM em reais`
+          ) * `Percentual da perda de renda líquida`
+        ) %>%
+        mutate("Valor acumulado sem correção e sem juros"  = `Renda líquida perdida ao mês` * 48) %>%
+        mutate("Renda acumulada corrigida a Valor Futuro (IPCA+2%a.a.)" = `Renda líquida perdida ao mês` * correcao) %>%
+        mutate("Renda acumulada corrigida a Valor Presente (IPCA+2%a.a.)" = `Renda líquida perdida ao mês` * presente) %>%
+        mutate("Total devido referente à perda de renda"  = `Renda líquida perdida ao mês` * (presente + correcao))  %>%
+        ungroup() %>%
+        pivot_longer(!NF,
+                     names_to =  "perguntas",
+                     values_to =  "valores"
+        )
+
+      datatable(total1%>%
+                  filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      )
+    })
+
+
+
+    output$realocacao <- renderDataTable({
+
+      x$ex_df43 %>%
+        select(-primary_key) %>%
+        mutate(valores=as.numeric(valores)) %>%
+        mutate(valores=case_when(
+          is.character(valores) ~ 0
+          ,is.na(valores) ~ 0
+          ,TRUE ~valores
+        )) %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        group_by(NF) %>%
+        mutate(
+          lucro_anterior = `Valor do faturamento bruto anterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade anterior ao acionamento do PAEBM em reais`
+        ) %>%
+        ungroup() %>%
+        select(NF, lucro_anterior) %>%
+        pivot_longer(!NF,
+                     names_to =  "perguntas",
+                     values_to =  "valores"
+        ) %>%
+        filter(perguntas == "lucro_anterior") %>%
+        mutate(`Local da realização da atividade econômica` = valores*12) %>%
+        select(-perguntas)
+
+
+
+    })
+
+
+    observeEvent(input$saveBtn_ex_df44,{
+      salvar_tabela(x$ex_df44, renda_clone(), "renda")
+    })
+
+    x$ex_df44 <<-   renda %>%
+      filter(topico == "Pessoa Jurídica") %>%
+      filter(parte == "Gasto relacionado a mudança") %>%
+      mutate(perguntas = "Gastos relacionados com a mudança do local da atividade econômica (mudança)")
+
+    # output$ex_df44<-  tabela_dinamica(x$ex_df44, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df44<-  tabela_dinamica(x$ex_df44)
+
+
+    proxy44 = dataTableProxy('ex_df44')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df44_cell_edit, {
+      info = input$ex_df44_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df44[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df44[[6]][i]))
+
+      x$ex_df44 <- x$ex_df44  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy44, x$ex_df44, resetPaging = FALSE)  # important
+
+    })
+
+    observeEvent(input$saveBtn_ex_df044,{
+      salvar_tabela(x$ex_df044, renda_clone(), "renda")
+    })
+
+    x$ex_df044 <<-   renda %>%
+      filter(topico == "Pessoa Jurídica") %>%
+      filter(parte == "Gasto com reforma")%>%
+      mutate(perguntas = "Gastos relacionados com a mudança do local da atividade econômica (reforma)")
+
+    # output$ex_df044<-  tabela_dinamica(x$ex_df044, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df044<-  tabela_dinamica(x$ex_df044)
+
+
+    proxy044 = dataTableProxy('ex_df044')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df044_cell_edit, {
+      info = input$ex_df044_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df044[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df044[[6]][i]))
+
+      x$ex_df044 <- x$ex_df044  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy044, x$ex_df044, resetPaging = FALSE)  # important
+
+    })
+
+
+
+
+    observeEvent(input$saveBtn_ex_df45,{
+      salvar_tabela(x$ex_df45, renda_clone(), "renda")
+    })
+
+    x$ex_df45 <<-   renda %>%
+      filter(topico == "Pessoa Jurídica") %>%
+      filter(parte == "Infraestrutura e Estoques") %>% distinct()
+
+    # output$ex_df45<-  tabela_dinamica(x$ex_df45, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df45<-  tabela_dinamica(x$ex_df45)
+
+    proxy45 = dataTableProxy('ex_df45')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df45_cell_edit, {
+      info = input$ex_df45_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df45[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df45[[6]][i]))
+
+      x$ex_df45 <- x$ex_df45  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy45, x$ex_df45, resetPaging = FALSE)  # important
+
+    })
+
+    output$infra_estoque_pj <- renderDataTable({
+
+
+     datatable(x$ex_df45 %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        group_by(NF) %>%
+        mutate(`SubTotal Infra e Estoque` = `Valor da infraestrutura (máquinas, equipamentos, etc)` +
+                 `Valor do estoque`) %>%
+        summarise(`SubTotal Infra e Estoque` = plus(`SubTotal Infra e Estoque` )) %>%
+          ungroup() %>%
+        select(NF,`SubTotal Infra e Estoque` ) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+     )
+
+
+
+    })
+
+    observeEvent(input$saveBtn_ex_df28,{
+      salvar_tabela(x$ex_df28, renda_aumento_divida, "renda_aumento_divida")
+    })
+
+    x$ex_df28 <<-  renda_aumento_divida %>%
+      mutate(`Valor do aumento mensal` = numero(`Valor do aumento mensal`),
+             `Quantidade de meses em que o aumento ocorreu:` = numero(`Quantidade de meses em que o aumento ocorreu:`),
+             `Valor total` = numero(`Valor total`)) %>%
+      mutate(`Quantidade de meses em que o aumento ocorreu:` = replace_na(`Quantidade de meses em que o aumento ocorreu:`, 0)) %>%
+      mutate(`Valor do aumento mensal` = replace_na(`Valor do aumento mensal`, 0)) %>%
+      mutate(`Valor total` = `Valor do aumento mensal` * `Quantidade de meses em que o aumento ocorreu:`)
+
+
+    # output$ex_df28<-  tabela_dinamica(x$ex_df28, add = "add_btn25", colunas = 9, "delete_btn25" )
+    output$ex_df28<-  tabela_dinamica(x$ex_df28)
+
+
+    proxy28 = dataTableProxy('ex_df28')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df28_cell_edit, {
+      info = input$ex_df28_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(5,6,7)){
+
+
+        x$ex_df28[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df28[i,j]))
+
+        x$ex_df28 <- x$ex_df28 %>%
+          mutate(`Valor total` = `Valor do aumento mensal` * `Quantidade de meses em que o aumento ocorreu:`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy28, x$ex_df28, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df28[i,j] <-(DT::coerceValue(v, x$ex_df28[i,j]))
+
+        x$ex_df28 <- x$ex_df28 %>%
+          mutate(`Valor total` = `Valor do aumento mensal` * `Quantidade de meses em que o aumento ocorreu:`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy28, x$ex_df28, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$ex_df30 <- DT::renderDataTable({
+
+
+      datatable(x$ex_df28  %>%
+                  mutate(`Valor total` = replace_na(`Valor total`,0)) %>%
+                  group_by(NF) %>%
+                  summarise("valores" = sum(`Valor total`)) %>%
+                  mutate(perguntas = "Aumento de Despesas Pessoa Física") %>%
+                  relocate(NF, perguntas)%>%
+                  filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+
+
+                )
+
+
+
+    })
+
+
+    observeEvent(input$saveBtn_ex_df46,{
+      salvar_tabela(x$ex_df46, renda_clone(), "renda")
+    })
+
+    x$ex_df46 <<-   renda %>%
+      filter(topico == "Pessoa Jurídica") %>%
+      filter(parte == "Burocracia")
+
+    # output$ex_df46<-  tabela_dinamica(x$ex_df46, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df46<-  tabela_dinamica(x$ex_df46)
+
+    proxy46 = dataTableProxy('ex_df46')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df46_cell_edit, {
+      info = input$ex_df46_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df46[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df46[[6]][i]))
+
+      x$ex_df46 <- x$ex_df46  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy46, x$ex_df46, resetPaging = FALSE)  # important
+
+    })
+
+
+    observeEvent(input$saveBtn_ex_df47,{
+      salvar_tabela(x$ex_df47, renda_clone(), "renda")
+    })
+
+    x$ex_df47 <<-   renda %>%
+      filter(topico == "Pessoa Jurídica") %>%
+      filter(parte == "Dívidas Trabalhistas")
+
+    # output$ex_df47<-  tabela_dinamica(x$ex_df47, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df47<-  tabela_dinamica(x$ex_df47)
+
+    proxy47 = dataTableProxy('ex_df47')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df47_cell_edit, {
+      info = input$ex_df47_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df47[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df47[[6]][i]))
+
+      x$ex_df47 <- x$ex_df47  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy47, x$ex_df47, resetPaging = FALSE)  # important
+
+    })
+
+    output$divida_trabalhista <- renderDataTable({
+
+
+      datatable(x$ex_df47%>%
+                  group_by(NF) %>%
+                  mutate("Subtotal Divida Trabalhista"= plus(valores)) %>%
+                  ungroup() %>%
+                  select(NF,`Subtotal Divida Trabalhista` ) %>%
+                  distinct()%>%
+                  filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      )
+
+
+
+    })
+
+
+    observeEvent(input$saveBtn_ex_df48,{
+      salvar_tabela(x$ex_df48, renda_clone(), "renda")
+    })
+
+    x$ex_df48 <<- renda %>%
+      filter(topico == "Dívidas a partir do PAEBM") %>%
+      filter(parte == "Pessoa Física")
+
+
+    # output$ex_df48<-  tabela_dinamica(x$ex_df48, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df48<-  tabela_dinamica(x$ex_df48)
+
+    proxy48 = dataTableProxy('ex_df48')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df48_cell_edit, {
+      info = input$ex_df48_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df48[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df48[[6]][i]))
+
+      x$ex_df48 <- x$ex_df48  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy48, x$ex_df48, resetPaging = FALSE)  # important
+
+    })
+
+    output$divida_antes_pf <- renderDataTable({
+
+
+      datatable(x$ex_df48%>%
+                  group_by(NF) %>%
+                  mutate("Subtotal Dívidas realizadas por pessoa física"= plus(valores)) %>%
+                  ungroup() %>%
+                  select(NF,`Subtotal Dívidas realizadas por pessoa física` ) %>%
+                  distinct()%>%
+                  filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+
+      )
+
+
+
+    })
+
+    observeEvent(input$saveBtn_ex_df49,{
+      salvar_tabela(x$ex_df49, renda_divida_anterior_clone(), "renda_divida_anterior")
+    })
+
+
+    x$ex_df49 <<- renda_divida_anterior %>%
+      filter(topico == "Dívidas anteriores ao PAEBM") %>%
+      filter(parte == "Dívidas Bancárias") %>%
+      mutate(`Aumento dívida` = `Valor da dívida (juros, encargos e multas) na data do pagamento da indenização` - `Valor da dívida (juros, encargos e multas) em janeiro de 2019`)
+
+
+    # output$ex_df49<-  tabela_dinamica(x$ex_df49, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df49<-  tabela_dinamica(x$ex_df49)
+
+    proxy49 = dataTableProxy('ex_df49')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df49_cell_edit, {
+      info = input$ex_df49_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(6,7)){
+
+
+
+        x$ex_df49[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df49[i,j]))
+
+      x$ex_df49 <- x$ex_df49  %>%
+        mutate(`Aumento dívida` = `Valor da dívida (juros, encargos e multas) na data do pagamento da indenização` - `Valor da dívida (juros, encargos e multas) em janeiro de 2019`) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy49, x$ex_df49, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+
+    x$ex_df050 <<- renda %>%
+      filter(topico == "Dívidas a partir do PAEBM") %>%
+      filter(parte == "Pessoa Jurídica")
+
+
+    # output$ex_df050<-  tabela_dinamica(x$ex_df050, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df050<-  tabela_dinamica(x$ex_df050)
+
+    proxy050 = dataTableProxy('ex_df050')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df050_cell_edit, {
+      info = input$ex_df050_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      x$ex_df050[[6]][i] <- as.numeric(DT::coerceValue(v, x$ex_df050[[6]][i]))
+
+      x$ex_df050 <- x$ex_df050  %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+      DT::replaceData(proxy050, x$ex_df050, resetPaging = FALSE)  # important
+
+    })
+
+    output$divida_antes_pj <- renderDataTable({
+
+
+      datatable(x$ex_df050%>%
+                  mutate("Subtotal Dívidas realizadas por pessoa jurídica"= plus(valores)) %>%
+                  select(NF,`Subtotal Dívidas realizadas por pessoa jurídica` ) %>%
+                  distinct()
+      )
+
+
+
+    })
+
+
+    observeEvent(input$saveBtn_ex_df050,{
+      salvar_tabela(x$ex_df050, renda_clone(), "renda")
+    })
+
+    observeEvent(input$saveBtn_ex_df50,{
+      salvar_tabela(x$ex_df50, renda_divida_anterior_clone(), "renda_divida_anterior")
+    })
+
+
+    x$ex_df50 <<- renda_divida_anterior %>%
+      filter(topico == "Dívidas anteriores ao PAEBM") %>%
+      filter(parte == "Dívidas de outra natureza") %>%
+      mutate(`Aumento dívida` = `Valor da dívida (juros, encargos e multas) na data do pagamento da indenização` - `Valor da dívida (juros, encargos e multas) em janeiro de 2019`)
+
+
+
+
+    # output$ex_df50<-  tabela_dinamica(x$ex_df50, add = "add_btn23", colunas = 7, "delete_btn23" )
+    output$ex_df50<-  tabela_dinamica(x$ex_df50)
+
+    proxy50 = dataTableProxy('ex_df50')
+
+    data = reactiveValues()
+
+    observeEvent(input$ex_df50_cell_edit, {
+      info = input$ex_df50_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(6,7)){
+
+
+
+        x$ex_df50[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df50[i,j]))
+
+        x$ex_df50 <- x$ex_df50  %>%
+          mutate(`Aumento dívida` = `Valor da dívida (juros, encargos e multas) na data do pagamento da indenização` - `Valor da dívida (juros, encargos e multas) em janeiro de 2019`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy50, x$ex_df50, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+
+    output$ex_df51 <- renderDataTable({resultado_ex_df51()})
+
+    observeEvent(input$saveBtn_ex_df51,{
+      salvar_tabela(resultado_ex_df51()
+                    , NA, "final_renda_indv")
+    })
+
+    resultado_ex_df51 <- reactive({
+
+      tabela <- retornar_tabela_completa(paste0(data_paebm_value()), paste0(data_acordo_value()))
+      correcao <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_acordo_value())), "month")) %>%
+        select(2) %>%
+        unlist()
+      presente <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_paebm_value())), "month")  %m+% months(47)) %>%
+        select(3) %>%
+        unlist()
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+
+      resultado1 <- x$ex_df26 %>%
+        select(-primary_key) %>%
+        mutate(valores=as.numeric(valores)) %>%
+        mutate(valores=case_when(
+          is.character(valores) ~ 0
+          ,is.na(valores) ~ 0
+          ,TRUE ~valores
+        )) %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        group_by(NF) %>%
+        mutate(
+          lucro_anterior = `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade anterior ao acionamento do PAEBM`
+        ) %>%
+        mutate(
+          lucro_posterior = `Valor da renda mensal bruta posterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade posterior ao acionamento do PAEBM`
+        ) %>%
+        mutate(
+          `Percentual da perda de renda líquida` = (1 - lucro_posterior / lucro_anterior)
+        ) %>%
+        summarise(
+          "Renda líquida perdida ao mês"  = (
+            `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade anterior ao acionamento do PAEBM`
+          ) * `Percentual da perda de renda líquida`
+        ) %>%
+        mutate("Valor acumulado sem correção e sem juros"  = `Renda líquida perdida ao mês` * 48) %>%
+        mutate("Renda acumulada corrigida a Valor Futuro (IPCA+2%a.a.)" = `Renda líquida perdida ao mês` * correcao) %>%
+        mutate("Renda acumulada corrigida a Valor Presente (IPCA+2%a.a.)" = `Renda líquida perdida ao mês` * presente) %>%
+        mutate("Total devido referente à perda de renda"  = `Renda líquida perdida ao mês` * (presente + correcao))  %>%
+        ungroup() %>%
+        select(NF,`Total devido referente à perda de renda`) %>%
+        pivot_longer(!NF,
+                     names_to =  "perguntas",
+                     values_to =  "valores"
+        )%>%
+        distinct()
+
+
+      resultado2 <- x$ex_df40 %>%
+        mutate(valores=as.numeric(valores)) %>%
+        mutate(valores=case_when(
+          is.character(valores) ~ 0
+          ,is.na(valores) ~ 0
+          ,TRUE ~valores
+        )) %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        group_by(NF) %>%
+        mutate(
+          "Total devido referente à infraestrutura e estoques para autônomos" = `Valor da infraestrutura (equipamentos, máquinas, etc)` +
+            `Valor do estoque`) %>%
+        ungroup() %>%
+        select(c(2,7)) %>%
+        pivot_longer(!NF,
+                     names_to =  "perguntas",
+                     values_to =  "valores"
+        ) %>%
+        distinct()
+
+
+      resultado3 <-  x$ex_df26 %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        select(NF, `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`) %>%
+        group_by(NF) %>%
+        mutate("Dano ao trabalhador autônomo" = case_when(`Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` <= 1830 ~ (acordo*0.0816*
+                                                                                                                                               `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`*1.2),
+                                                          `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` <= 3050.52 ~ (acordo*0.0916*
+                                                                                                                                                  `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`*1.2),
+                                                          `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` <= 6101.06 ~ (acordo*0.1116*
+                                                                                                                                                  `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`*1.2),
+                                                          `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais` > 6101.06 ~ (acordo*0.1169*
+                                                                                                                                                 `Valor da renda mensal bruta anterior ao acionamento do PAEBM em reais`*1.2),
+                                                          TRUE ~ 0)) %>%
+        ungroup() %>%
+        select(NF,`Dano ao trabalhador autônomo`)%>%
+        left_join(x$ex_df42 %>%
+                    select(2,6)) %>%
+        mutate(`Dano ao trabalhador autônomo`= case_when(`valores` == 1 ~`Dano ao trabalhador autônomo`,
+                                                         TRUE ~ 0),
+               `valores`= case_when(`valores` == 1 ~ "Autônomo",
+                                                         TRUE ~ "Não se Aplica")) %>%
+        distinct() %>%
+        left_join(x$ex_df026 %>%
+                    select(NF, valores) %>%
+                    rename("Custos processuais contra empregador que não pagou direitos trabalhistas" = valores)) %>%
+        mutate(valores = `Dano ao trabalhador autônomo` + `Custos processuais contra empregador que não pagou direitos trabalhistas` ) %>%
+        group_by(NF) %>%
+        summarise("valores" = plus(valores)) %>%
+        mutate(perguntas="Danos relativos à contribuição previdenciária e custos processuais")
+
+
+      resultado4 <-x$ex_df28  %>%
+        mutate(`Valor total` = replace_na(`Valor total`,0)) %>%
+        group_by(NF) %>%
+        summarise("valores" = sum(`Valor total`)) %>%
+        mutate(perguntas = "Aumento de Despesas Pessoa Física") %>%
+        distinct()
+
+
+      resultado5 <- x$ex_df41 %>%
+        group_by(NF) %>%
+        summarise(valores = sum(valores)) %>%
+        mutate(perguntas = "Total - Dívidas trabalhistas  (custos com demissões e afins) - PF")%>%
+        distinct()
+
+
+      resultado8 <- x$ex_df43 %>%
+        select(-primary_key) %>%
+        mutate(valores=as.numeric(valores)) %>%
+        mutate(valores=case_when(
+          is.character(valores) ~ 0
+          ,is.na(valores) ~ 0
+          ,TRUE ~valores
+        )) %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        group_by(NF) %>%
+        mutate(
+          lucro_anterior = `Valor do faturamento bruto anterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade anterior ao acionamento do PAEBM em reais`
+        ) %>%
+        ungroup() %>%
+        select(NF, lucro_anterior) %>%
+        rename("Total devido referente aos lucros cessantes"= lucro_anterior) %>%
+        pivot_longer(!NF,
+                     names_to =  "perguntas",
+                     values_to =  "valores"
+        ) %>%
+        filter(perguntas == "Total devido referente aos lucros cessantes") %>%
+        mutate(valores = valores* (presente + correcao))
+
+      resultado9 <- x$ex_df44 %>%
+        select(NF, perguntas, valores)%>%
+        distinct()
+
+      resultado7 <- x$ex_df044 %>%
+        select(NF, perguntas, valores ) %>%
+        distinct()
+
+
+      resultado10 <-
+        x$ex_df45 %>%
+        pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+        group_by(NF) %>%
+        summarise(valores = sum(`Valor da infraestrutura (máquinas, equipamentos, etc)` +
+                    `Valor do estoque`)) %>%
+        ungroup() %>%
+        mutate(perguntas = "SubTotal Infra e Estoque") %>%
+        distinct()
+
+
+      resultado11 <- x$ex_df46%>%
+        select(NF, perguntas, valores) %>%
+        group_by(NF) %>%
+        summarise(valores = sum(valores)) %>%
+        mutate(perguntas = "Custos burocráticos ocorridos devido o acionamento do PAEBM")%>%
+        distinct()
+
+     resultado12 <-  x$ex_df47%>%
+       group_by(NF) %>%
+        mutate("valores"= plus(valores)) %>%
+        mutate(perguntas = "Dívidas trabalhistas  (custos com demissões e afins) - PJ") %>%
+        select(NF,perguntas, valores ) %>%
+        distinct()
+
+     resultado13 <- x$ex_df48%>%
+       group_by(NF) %>%
+       mutate("valores"= plus(valores)) %>%
+       mutate(perguntas = "Subtotal Dívidas realizadas por pessoa física") %>%
+       select(NF,perguntas, valores ) %>%
+       distinct()
+
+     resultado6<-x$ex_df050%>%
+       group_by(NF) %>%
+       mutate("valores"= plus(valores)) %>%
+       mutate(perguntas = "Subtotal Dívidas realizadas por pessoa Juridica") %>%
+       select(NF,perguntas, valores ) %>%
+       distinct()
+
+     resultado14 <- x$ex_df49%>%
+       select(2,5,8) %>%
+       group_by(NF) %>%
+       summarise(valores = plus(`Aumento dívida`)) %>%
+       mutate(perguntas = "Dividas Bancarias Anteriores ao PAEBM")
+
+     resultado15 <- x$ex_df50%>%
+       # mutate(`Aumento dívida` = `Valor da dívida (juros, encargos e multas) na data do pagamento da indenização` - `Valor da dívida (juros, encargos e multas) em janeiro de 2019`) %>%
+       select(2,5,8) %>%
+       group_by(NF) %>%
+       summarise(valores = plus(`Aumento dívida`)) %>%
+       mutate(perguntas = "Dividas de outra natureza Anteriores ao PAEBM")
+
+
+
+     resultado16 <- x$ex_df43 %>%
+       select(-primary_key) %>%
+       mutate(valores=as.numeric(valores)) %>%
+       mutate(valores=case_when(
+         is.character(valores) ~ 0
+         ,is.na(valores) ~ 0
+         ,TRUE ~valores
+       )) %>%
+       pivot_wider(names_from = perguntas, values_from = valores, values_fill=0) %>%
+       group_by(NF) %>%
+       mutate(
+         lucro_anterior = `Valor do faturamento bruto anterior ao acionamento do PAEBM em reais` - `Valor dos custos mensais da atividade anterior ao acionamento do PAEBM em reais`
+       ) %>%
+       ungroup() %>%
+       select(NF, lucro_anterior) %>%
+       pivot_longer(!NF,
+                    names_to =  "perguntas",
+                    values_to =  "valores"
+       ) %>%
+       filter(perguntas == "lucro_anterior") %>%
+       mutate(valores = valores*12) %>%
+       mutate(perguntas  = "Realocação empresarial e ponto comercial")
+
+
+
+     total_danos_renda <- resultado1 %>%
+       rbind(resultado2) %>%
+       rbind(resultado3) %>%
+       rbind(resultado5) %>%
+       rbind(resultado4) %>%
+       rbind(resultado8) %>%
+       rbind(resultado16) %>%
+       rbind(resultado7) %>%
+       rbind(resultado9) %>%
+       rbind(resultado10) %>%
+       rbind(resultado11) %>%
+       rbind(resultado12) %>%
+       rbind(resultado13) %>%
+       rbind(resultado6) %>%
+       rbind(resultado14) %>%
+       rbind(resultado15)
+
+
+
+
+      datatable(total_danos_renda%>%
+                  filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))))
+
+
+
+    })
+
+
+    output$ex_df52 <- renderDataTable({resultado_ex_df52()})
+
+    observeEvent(input$saveBtn_ex_df52,{
+      salvar_tabela(resultado_ex_df52()
+                    , NA, "final_renda_total")
+    })
+
+
+
+      x$ex_df55 <<- desconto
+
+
+      output$ex_df55<-  tabela_dinamica(x$ex_df55)
+
+      proxy55 = dataTableProxy('ex_df55')
+
+      data = reactiveValues()
+
+      observeEvent(input$ex_df55_cell_edit, {
+        info = input$ex_df55_cell_edit
+        str(info)
+        # str(input$x1_state)
+        i = info$row
+        j = info$col
+        v = info$value
+
+        if(j %in% c(4)){
+
+
+
+          x$ex_df55[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df55[i,j]))
+
+          x$ex_df55 <- x$ex_df55  %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+          DT::replaceData(proxy55, x$ex_df55, resetPaging = FALSE)  # important
+
+        }
+        else{
+
+
+          x$ex_df55[i,j] <- (DT::coerceValue(v, x$ex_df55[i,j]))
+
+          x$ex_df55 <- x$ex_df55  %>%
+            filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+          DT::replaceData(proxy55, x$ex_df55, resetPaging = FALSE)  # important
+        }
+
+
+      })
+
+
+    observeEvent(input$saveBtn_ex_df55,{
+      salvar_tabela( x$ex_df55 , desconto, "desconto")
+    })
+
+
+
+    resultado_ex_df52 <- reactive({
+
+
+      total_danos_renda <- resultado_ex_df51()$x$data
+
+
+
+      soma_total <- total_danos_renda %>%
+        group_by(NF) %>%
+        mutate(valores = replace_na(valores,0)) %>%
+        summarise(Total = sum(valores))
+
+
+      datatable(soma_total%>%
+                  filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))))
+
+
+
+    })
+
+    # output$divida_antes_pj <- renderDataTable({
+    #
+    #
+    #   datatable(x$ex_df49%>%
+    #               mutate("Subtotal Dívidas realizadas por pessoa jurídica"= plus(valores)) %>%
+    #               select(NF,`Subtotal Dívidas realizadas por pessoa jurídica` ) %>%
+    #               distinct()
+    #   )
+    #
+    #
+    #
+    # })
+    #
+    #
+    # observeEvent(input$saveBtn_ex_df50,{
+    #   salvar_tabela(x$ex_df50, renda, "renda")
+    # })
+    #
+
+
+    #DIVIDAS
+
+
+    # output$ex_df31 <- DT::renderDataTable(datatable(x$ex_df29 %>%
+    #                                                   filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))) %>%
+    #                                                   ungroup() %>%
+    #                                                   select(2,6) %>%
+    #                                                   group_by(NF) %>%
+    #                                                   summarise("TOTAL POR ATINGIDO" = sum(`Valor da dívida (juros, encargos e multas) na data do pagamento da indenização`))))
+    # output$ex_df32 <- DT::renderDataTable(datatable(x$ex_df26 %>%
+    #                                                   filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))) %>%
+    #                                                   ungroup() %>%
+    #                                                   select(2,6) %>%
+    #                                                   group_by(NF) %>%
+    #                                                   summarise("TOTAL POR ATINGIDO" = sum(`valores`))))
+
+
+
+
+    #FORA DO PADRÃO
+
+    observeEvent(input$saveBtn_ex_df23,{
+      salvar_tabela(x$ex_df23, objetos_clone(), "objetos")
+    })
+
+     x$ex_df23 <<-  objetos%>%
+      mutate(`Valor do Item` = Quantidade*`Valor Unitário`) %>%
+      filter(Situação != "Encontrado") %>%
+       linhas_em_branco()
+
+
+
+    # output$ex_df23<-  tabela_dinamica(x$ex_df23, add = "add_btn27", colunas = 9, "delete_btn27" )
+    output$ex_df23<-  tabela_dinamica(x$ex_df23)
+
+
+    proxy23 = dataTableProxy('ex_df23')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df23_cell_edit, {
+      info = input$ex_df23_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(6,8)){
+
+
+        x$ex_df23[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df23[i,j]))
+
+        x$ex_df23 <- x$ex_df23 %>%
+          mutate(`Valor do Item` = Quantidade*`Valor Unitário`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy23, x$ex_df23, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df23[i,j] <-(DT::coerceValue(v, x$ex_df23[i,j]))
+
+        x$ex_df23 <- x$ex_df23 %>%
+          mutate(`Valor do Item` = Quantidade*`Valor Unitário`)%>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy23, x$ex_df23, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+
+    output$total_objetos_fora <- renderInfoBox({
+
+      x$ex_df23 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        mutate(`Valor do Item` =`Valor Unitário`  * Quantidade) %>%
+        summarise(plus(`Valor do Item`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Total Objetos Fora do padrão",
+                 icon = icon("utensil-spoon"),
+                 color = "red")
+
+
+
+
+
+    })
+
+
+
+    # Agrárias fora do padrão
+    observeEvent(input$saveBtn_ex_df24,{
+      salvar_tabela(x$ex_df24, agrarias, "agrarias")
+    })
+
+    x$ex_df24 <<-  agrarias %>%
+      filter(parte_matriz == "fora_padrao") %>%
+      mutate(`Valor liquido` = Quantidade*`Valor Item`)
+
+
+
+    # output$ex_df24<-  tabela_dinamica(x$ex_df24, add = "add_btn28", colunas = 10, "delete_btn28" )
+    output$ex_df24<-  tabela_dinamica(x$ex_df24)
+
+
+    proxy24 = dataTableProxy('ex_df24')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df24_cell_edit, {
+      info = input$ex_df24_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(4,5,8)){
+
+
+        x$ex_df24[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df24[i,j]))
+
+        x$ex_df24 <- x$ex_df24  %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy24, x$ex_df24, resetPaging = FALSE)  # important
+
+      }
+
+      else{
+        x$ex_df24[i,j] <-(DT::coerceValue(v, x$ex_df24[i,j]))
+
+        x$ex_df24 <- x$ex_df24 %>%
+          mutate(`Valor liquido` = Quantidade*`Valor Item`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy24, x$ex_df24, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$agrarias_outros <- renderInfoBox({
+
+      x$ex_df24 %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        # mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+        summarise(plus(`Valor liquido`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Agrarias Outros",
+                 icon = icon("coins"),
+                 color = "green")
+
+
+
+
+    })
+
+
+
+    # Arquitetura fora do padrão
+
+    observeEvent(input$saveBtn_ex_df25,{
+      salvar_tabela(x$ex_df25, arquitetura_clone(), "arquitetura")
+    })
+
+    x$ex_df25 <<-  arquitetura %>%
+      filter(parte_matriz == "fora_padrao")  %>%
+      mutate(`Valor do Item` = Quantidade*`Valor unitário`)
+
+
+
+    # output$ex_df25<-  tabela_dinamica(x$ex_df25, add = "add_btn29", colunas = 11, "delete_btn29" )
+    output$ex_df25<-  tabela_dinamica(x$ex_df25)
+
+
+    proxy25 = dataTableProxy('ex_df25')
+
+    data = reactiveValues()
+    observeEvent(input$ex_df25_cell_edit, {
+      info = input$ex_df25_cell_edit
+      str(info)
+      # str(input$x1_state)
+      i = info$row
+      j = info$col
+      v = info$value
+
+      if(j %in% c(5,9)){
+
+        v <- numero(v)
+
+        x$ex_df25[i,j] <- as.numeric(DT::coerceValue(v, x$ex_df25[i,j]))
+
+        x$ex_df25 <- x$ex_df25  %>%
+          mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy25, x$ex_df25, resetPaging = FALSE)  # important
+
+      }
+
+      else {
+        x$ex_df25[i,j] <-(DT::coerceValue(v, x$ex_df25[i,j]))
+
+        x$ex_df25 <- x$ex_df25  %>%
+          mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+          filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF)))
+        DT::replaceData(proxy25, x$ex_df25, resetPaging = FALSE)  # important
+
+      }
+
+    })
+
+    output$imoveis_outros <- renderInfoBox({
+
+      x$ex_df25 %>%
+        mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+        filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+        ))) %>%
+        summarise(plus(`Valor do Item`)) %>%
+        prettyNum(big.mark = ",", decimal.mark = ".") %>%
+        currency(symbol = "R$") %>%
+        valueBox(subtitle = "Valor Total Arquitetura Outros",
+                 icon = icon("hammer"),
+                 color = "red")
+    })
+
+    #VALOR PRESENTE E VALOR FUTURO
+
+    output$valor_futuro <- renderInfoBox({
+
+      tabela <- retornar_tabela_completa(paste0(data_paebm_value()), paste0(data_acordo_value()))
+      correcao <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_acordo_value())), "month")) %>%
+        select(2) %>%
+        unlist()
+      presente <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_paebm_value())), "month")  %m+% months(47)) %>%
+        select(3) %>%
+        unlist()
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+      correcao %>%
+        valueBox(value = tags$p("Valor Futuro", style = "font-size: 50%;")
+                 ,subtitle  = tags$p(., style = "font-size: 100%;")
+                 ,icon = icon("coins")
+                 ,color = "yellow"
+                 )
+
+
+    })
+
+    output$valor_presente <- renderInfoBox({
+
+      tabela <- retornar_tabela_completa(paste0(data_paebm_value()), paste0(data_acordo_value()))
+      correcao <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_acordo_value())), "month")) %>%
+        select(2) %>%
+        unlist()
+      presente <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_paebm_value())), "month")  %m+% months(47)) %>%
+        select(3) %>%
+        unlist()
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+
+
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+       presente%>%
+        valueBox(value = tags$p("Valor Presente", style = "font-size: 50%;")
+                 ,subtitle = tags$p(., style = "font-size: 100%;")
+                 ,icon = icon("coins")
+                 ,color = "yellow"
+                 )
+
+    })
+
+    ##DF CLONES
+
+    #ARQ
+    arquitetura_clone <- reactive({
+      x$ex_df8 %>%
+        rbind.data.frame(x$ex_df7) %>%
+        rbind.data.frame(x$ex_df6) %>%
+        rbind.data.frame(x$ex_df5) %>%
+        rbind.data.frame(x$ex_df4) %>%
+        rbind.data.frame(x$ex_df25)
+    })
+
+    #OBJETOS
+
+    objetos_clone <- reactive({
+      x$ex_df9 %>%
+        rbind.data.frame(x$ex_df23)
+
+    })
+
+    #AGRARIAS
+
+    agrarias_clone <- reactive({
+      x$ex_df010 %>%
+        rbind.data.frame(x$ex_df11) %>%
+        rbind.data.frame(x$ex_df12) %>%
+        rbind.data.frame(x$ex_df14) %>%
+        rbind.data.frame(x$ex_df014) %>%
+        rbind.data.frame(x$ex_df15) %>%
+        rbind.data.frame(x$ex_df16) %>%
+        rbind.data.frame(x$ex_df17) %>%
+        rbind.data.frame(x$ex_df18) %>%
+        rbind.data.frame(x$ex_df19) %>%
+        rbind.data.frame(x$ex_df20) %>%
+        rbind.data.frame(x$ex_df24)
+    })
+
+    #RENDA DIVIDA ANTERIOR
+    renda_divida_anterior_clone <- reactive({
+      x$ex_df50 %>%
+        rbind.data.frame(x$ex_df49)
+    })
+
+    #RENDA
+
+    renda_clone <- reactive({
+      x$ex_df26 %>%
+        rbind.data.frame(x$ex_df40) %>%
+        rbind.data.frame(x$ex_df050) %>%
+        rbind.data.frame(x$ex_df48) %>%
+        rbind.data.frame(x$ex_df47) %>%
+        rbind.data.frame(x$ex_df46) %>%
+        rbind.data.frame(x$ex_df45) %>%
+        rbind.data.frame(x$ex_df044) %>%
+        rbind.data.frame(x$ex_df44) %>%
+        rbind.data.frame(x$ex_df41) %>%
+        rbind.data.frame(x$ex_df026) %>%
+        rbind.data.frame(x$ex_df43) %>%
+        rbind.data.frame(x$ex_df42)
+
+    })
+
+
+
+
+
+
+    output$ex_df53 <- renderDataTable({resultado_ex_df53()})
+
+    observeEvent(input$saveBtn_ex_df53,{
+      salvar_tabela(resultado_ex_df53()
+                    , NA, "final_resultado")
+    })
+
+
+
+    resultado_ex_df53 <- reactive({
+
+      tabela <- retornar_tabela_completa(paste0(data_paebm_value()), paste0(data_acordo_value()))
+      correcao <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_acordo_value())), "month")) %>%
+        select(2) %>%
+        unlist()
+      presente <- tabela %>%
+        filter(data == floor_date(as.Date(paste0(data_paebm_value())), "month")  %m+% months(47)) %>%
+        select(3) %>%
+        unlist()
+      acordo <- as.double(difftime(paste0(data_acordo_value()), paste0(data_paebm_value()), units ="days")/365*12)
+
+  horta_total <-ex_df10() %>%
+    group_by(NF) %>%
+    summarise( `Valor liquido` = plus(`Valor liquido`)) %>%
+    mutate(`Valor liquido` = round(`Valor liquido` *(presente+correcao),2),
+           `Valor liquido` = ifelse(`Valor liquido` < 27120 & `Valor liquido` != 0, 27120, `Valor liquido`)) %>%
+  mutate("Origem da Reparação" = "Hortas, temperos, medicinais")
+
+
+  frutiferas_valor <-    x$ex_df11  %>%
+    # agrarias %>%
+    # filter(parte_matriz== "frutiferas") %>%
+    group_by(NF) %>%
+    summarise(`Valor liquido` = plus(`Valor liquido`)) %>%
+    mutate(`Valor liquido` = ifelse(`Valor liquido` < 27120 & `Valor liquido` != 0, 27120, round(`Valor liquido`,2))) %>%
+    mutate("Origem da Reparação" = "Pomar/frutíferas e outras espécies arbóreas")
+
+
+#
+  frutiferas_valor <-    x$ex_df11  %>%
+    # agrarias %>%
+    # filter(parte_matriz== "frutiferas") %>%
+    group_by(NF) %>%
+    summarise(`Valor liquido` = plus(`Valor liquido`)) %>%
+    mutate(`Valor liquido` = ifelse(`Valor liquido` < 27120 & `Valor liquido` != 0, 27120, round(`Valor liquido`,2))) %>%
+    mutate("Origem da Reparação" = "Pomar/frutíferas e outras espécies arbóreas")
+
+  ornamentais_valor <-
+    x$ex_df12 %>%
+
+    # agrarias %>%
+    # filter(parte_matriz== "ornamentais") %>%
+    # mutate("Valor liquido" = Quantidade*`Valor Item`)%>%
+    group_by(NF) %>%
+    summarise(`Valor liquido` = round(plus(`Valor liquido`),2)) %>%
+    mutate("Origem da Reparação" = "Ornamentais/Jardins")
+
+  roca_total <-
+    x$ex_df13 %>%
+
+    # mutate("Valor líquido" = round((Quantidade*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`)/12),2))%>%
+    group_by(NF) %>%
+    summarise(`Valor liquido` = round(plus(`Valor líquido`)*(presente+correcao),2))%>%
+    mutate("Origem da Reparação" = "Lavouras")
+
+  consorcio_total <-
+    x$ex_df21 %>%
+    ungroup() %>%
+
+    # consorcio %>%
+    # mutate(`Valor liquido` = round((area_cultivo*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`))/12,2)) %>%
+    group_by(NF) %>%
+    summarise(`Valor liquido` = round(plus(`Valor liquido`)*(presente+correcao),2))%>%
+    mutate("Origem da Reparação" = "Consórcios")
+
+
+   forrageiras_total<-  x$ex_df014%>%
+    ungroup() %>%
+
+    filter(parte_matriz == "forrageira")%>%
+    # mutate("Valor líquido" = round((Quantidade*`Valor Unitário Bruto (R$)`*(1-`% Custos de produção`)/12),2))%>%
+    group_by(NF) %>%
+    summarise(`Valor liquido` = round(plus(`Valor liquido`)*(presente+correcao),2))%>%
+    mutate("Origem da Reparação" = "Pastagens forrageiras")
+
+
+
+  pastagem_total <-
+    x$ex_df14 %>%
+
+    # agrarias %>%
+    # filter(parte_matriz== "pastagem") %>%
+    # mutate("Valor liquido" = Quantidade*`Valor Item`) %>%
+    group_by(NF) %>%
+    summarise(`Valor liquido` = round(plus(`Valor liquido`),2)) %>%
+    mutate("Origem da Reparação" = "Pastagem")
+
+
+
+
+  resultado1_AGRO  <- frutiferas_valor%>%
+  rbind(horta_total) %>%
+  rbind(ornamentais_valor) %>%
+  rbind(roca_total) %>%
+  rbind(consorcio_total) %>%
+  rbind(pastagem_total) %>%
+  rbind(forrageiras_total)
+
+
+
+agrarias1 <-    x$ex_df15 %>%
+
+  # agrarias %>%
+  # filter(parte_matriz == "pecuaria") %>%
+  # mutate(`Valor liquido` = Quantidade*`Valor Item`) %>%
+  group_by(NF) %>%
+  summarise(`Valor liquido` = plus(`Valor liquido`)) %>%
+  mutate("Origem da Reparação" = "Pecuária")
+
+agrarias2 <-    x$ex_df16 %>%
+
+  # agrarias %>%
+  # filter(parte_matriz == "aquicultura") %>%
+  # mutate(`Valor liquido` = Quantidade*`Valor Item`) %>%
+  group_by(NF) %>%
+  summarise(`Valor liquido` = plus(`Valor liquido`)) %>%
+  mutate("Origem da Reparação" = "Aqüicultura ")
+
+agrarias3 <-    x$ex_df17 %>%
+
+  # agrarias %>%
+  # filter(parte_matriz == "avicultura") %>%
+  # mutate(`Valor liquido` = Quantidade*`Valor Item`) %>%
+  group_by(NF) %>%
+  summarise(`Valor liquido`= plus(`Valor liquido`))%>%
+  mutate("Origem da Reparação" = "Avicultura ")
+
+
+agrarias4 <-    x$ex_df18 %>%
+
+  # agrarias %>%
+  # filter(parte_matriz == "apicultura") %>%
+  # mutate(`Valor liquido` = Quantidade*`Valor Item`) %>%
+  group_by(NF) %>%
+  summarise(`Valor liquido` = plus(`Valor liquido`)) %>%
+  mutate("Origem da Reparação" = "Apicultura")
+
+agrarias5 <-    x$ex_df19 %>%
+
+  # agrarias %>%
+  # filter(parte_matriz == "insumos") %>%
+  # mutate(`Valor liquido` =Quantidade*`Valor Item` ) %>%
+  group_by(NF) %>%
+  summarise(`Valor liquido` = round(plus(`Valor liquido`)))%>%
+  mutate("Origem da Reparação" = "Insumos e equipamentos agropecuários")
+
+agrarias6<-    x$ex_df20%>%
+
+  # agrarias %>%
+  # filter(parte_matriz == "producao_animal") %>%
+  # mutate(`Valor liquido` = Quantidade*`Valor Item` ) %>%
+  group_by(NF) %>%
+  summarise(`Valor liquido` = round(plus(`Valor liquido`)*(presente+correcao)))%>%
+  mutate("Origem da Reparação" = "Perda de renda da produção animal ")
+
+
+
+# prod_animal <- agrarias %>%
+#   filter(str_detect(parte_matriz, "pecuaria|aquicultura|avicultura|apicultura|animais insumo|producao animal")) %>%
+#   filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+#   ))) %>%
+#   mutate("Valor Total" = Quantidade*`Valor Item`) %>%
+#   summarise(plus(`Valor Total`)) %>%
+#   replace(is.na(.),0) %>%
+#   unlist(use.names = FALSE) %>%
+#   numero()
+
+
+agrarias_outros <-    x$ex_df24 %>%
+
+  # agrarias %>%
+  # filter(parte_matriz == "fora_padrao") %>%
+  # mutate(`Valor liquido` = Quantidade*`Valor Item`) %>%
+  group_by(NF) %>%
+  summarise(`Valor liquido` = round(plus(`Valor liquido`),2))%>%
+  mutate("Origem da Reparação" = "Agrárias - Tomada de Preço")
+
+  resultado2_AGRO <-  agrarias1 %>%
+    rbind(agrarias2) %>%
+    rbind(agrarias3) %>%
+    rbind(agrarias4) %>%
+    rbind(agrarias5) %>%
+    rbind(agrarias6) %>%
+    rbind(agrarias_outros)
+
+  resultado_AGRO <- resultado1_AGRO %>%
+     rbind(resultado2_AGRO) %>%
+    rename("Valor Total" = `Valor liquido`)
+
+
+  arquitetura0 <-    x$ex_df2 %>%
+
+    # terrenos %>%
+    # mutate( `Valor Total` = round(`Área ZAS 3 (m²)`* fator * valor_terreno,2)) %>%
+    group_by(NF) %>%
+    summarise("Valor Total" = plus(`Valor Total`))  %>%
+    mutate("Origem da Reparação" = "Terra Nua")
+#
+arquitetura1<-  x$ex_df3 %>%
+
+  # imoveis %>%
+  # mutate(`Valor do Item` = valor_unitario* Tamanho) %>%
+  group_by(NF) %>%
+  summarise("Valor Total" = plus(`Valor do Item`)) %>%
+  mutate("Origem da Reparação" = "Moradia e edificações")
+
+arquitetura2<-  x$ex_df4 %>%
+
+  # arquitetura %>%
+  # filter(parte_matriz == "lazer") %>%
+  mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+  group_by(NF) %>%
+  summarise("Valor Total" = plus(`Valor do Item`)) %>%
+  mutate("Origem da Reparação" = "Construções voltadas para lazer")
+
+
+arquitetura3<-  x$ex_df5 %>%
+
+  # arquitetura %>%
+  # filter(parte_matriz == "animais") %>%
+  mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+    group_by(NF) %>%
+  summarise("Valor Total" = plus(`Valor do Item`)) %>%
+  mutate("Origem da Reparação" = "Construções voltadas para criação de animais")
+
+arquitetura4<-  x$ex_df6  %>%
+
+  # arquitetura %>%
+  # filter(parte_matriz == "cotidiano") %>%
+  mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+  group_by(NF) %>%
+  summarise("Valor Total" = plus(`Valor do Item`)) %>%
+  mutate("Origem da Reparação" = "Construções voltadas para serviços e manutenção do cotidiano")
+
+arquitetura5<-  x$ex_df7 %>%
+
+  # arquitetura %>%
+  # filter(parte_matriz == "religioso") %>%
+  mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+  group_by(NF) %>%
+  summarise("Valor Total" = plus(`Valor do Item`)) %>%
+  mutate("Origem da Reparação" = "Construções voltadas para comércio e centro religioso")
+
+
+arquitetura6<-  x$ex_df8 %>%
+  # arquitetura %>%
+  # filter(parte_matriz == "benfeitorias") %>%
+  mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+  group_by(NF) %>%
+  summarise("Valor Total" = plus(`Valor do Item`)) %>%
+  mutate("Origem da Reparação" = "Benfeitoria")
+
+
+  arquitetura_outros <-    x$ex_df25 %>%
+    # arquitetura %>%
+    # filter(parte_matriz == "fora_padrao") %>%
+    mutate(`Valor do Item` = Quantidade*`Valor unitário`) %>%
+    group_by(NF) %>%
+    summarise("Valor Total" = plus(`Valor do Item`)) %>%
+    mutate("Origem da Reparação" = "Arquitetura - Tomada de Preço")
+
+
+  objetos1 <-
+    x$ex_df23 %>%
+
+    # objetos %>%
+    # filter(Situação == "Encontrado") %>%
+    mutate(`Valor do Item` =`Valor Unitário`  * Quantidade) %>%
+    group_by(NF) %>%
+    summarise("Valor Total" = plus(`Valor do Item`)) %>%
+    mutate("Origem da Reparação" = "Objetos - Tomada de Preço")
+
+  objetos2 <- x$ex_df9 %>%
+
+    # objetos %>%
+    # filter(Situação != "Encontrado") %>%
+    mutate(`Valor do Item` =`Valor Unitário`  * Quantidade) %>%
+    group_by(NF) %>%
+    summarise("Valor Total" = plus(`Valor do Item`)) %>%
+    mutate("Origem da Reparação" = "Objetos")
+
+  privacao_do_uso <- x$ex_df60 %>%
+    group_by(NF) %>%
+    summarise("Valor Total" = plus(`Valor Total`)) %>%
+    mutate("Origem da Reparação" = "Privação de Uso")
+
+  descontos <- x$ex_df55 %>%
+    group_by(NF) %>%
+    summarise("Valor Total" = plus(`Valor Total`)) %>%
+    mutate("Origem da Reparação" = "Descontos")
+
+
+
+
+
+  # arquitetura8 <-  x$ex_df2 %>%
+  #   filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF
+  #   ))) %>%
+  #   mutate( `Valor Total` = round(`Área ZAS 3 (m²)`* fator * valor_terreno,2)) %>%
+  #   summarise(round(plus(`Valor Total`),2))%>%
+  #   replace(is.na(.),0) %>%
+  #   unlist(use.names = FALSE) %>%
+  #   numero()
+
+  resultado_arq <- arquitetura1 %>%
+    rbind(arquitetura2) %>%
+    rbind(arquitetura3) %>%
+    rbind(arquitetura4) %>%
+    rbind(arquitetura5) %>%
+    rbind(arquitetura6) %>%
+    rbind(objetos1) %>%
+    rbind(objetos2) %>%
+    rbind(arquitetura_outros) %>%
+    rbind(arquitetura0) %>%
+    rbind(privacao_do_uso) %>%
+    rbind(descontos)
+
+  resultado_total <-
+  resultado_AGRO%>%
+    rbind(resultado_arq
+ ) %>%
+    relocate(NF)
+
+  datatable(resultado_total%>%
+              filter(str_detect(NF, if_else(input$v_NF == "Todos", "", input$v_NF))),
+            plugins = "ellipsis",
+            class = 'white-space: nowrap',
+            filter = list(position = 'top', clear = TRUE, plain = TRUE) ,
+            extensions =  c('Buttons','AutoFill','FixedHeader', 'KeyTable','ColReorder'),
+            editable = list(target = 'cell'),
+            selection = "single",
+            escape = FALSE ,
+            options = list(scrollX = TRUE,
+                           keys = TRUE,
+                           colReorder = list(realtime = FALSE),
+                           fixedHeader = TRUE,
+                           autoFill = list(focus = 'click', horizontal = FALSE) ,
+                           autoWidth=TRUE,
+                           pageLength =5 ,
+                           editable = TRUE,
+                           lengthMenu = list(c(5, 50, -1), c('5', '50', 'All')),
+                           dom = 'lBfrtip'
+                           ,
+                           buttons = list(c('colvis','pdf','excel'),
+                                          list(extend = "collection",
+                                               text = 'Mostrar Tudo'
+                                               ,
+                                               action = DT::JS("function ( e, dt, node, config ) { dt.page.len(-1);
+                                                       dt.ajax.reload();}")
+                                          ))
+            ))
+    })
+
+
+observe({
+  showModal(modalDialog(title = "Shiny em progresso",
+                        "O shiny está pronto para você utilizar",
+                        easyClose = TRUE,
+                        footer = NULL
+  ))
+})
+
+}
+
+shinyApp(ui, server)
+

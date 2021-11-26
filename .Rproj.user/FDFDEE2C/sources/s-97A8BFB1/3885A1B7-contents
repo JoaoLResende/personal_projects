@@ -1,0 +1,153 @@
+library(tidyverse)
+library(googlesheets4)
+library(googledrive)
+library(lubridate)
+
+
+source(file.path(getwd(), 'Functions/manipular_geral.R'), encoding = 'UTF-8', echo = TRUE, local = FALSE)
+
+
+entrega_controle_nf_diagramacao <- function(NF, grupo){
+
+  controle_nf_diagramacao <- read_sheet(as_id("1XeV10s4tqJ9zR2pNkKj98JZmbPILg05ltDB0lH54DR4"), sheet = NF)[-1,] %>%
+    select(1:3) %>%
+    left_join(read_sheet(as_id("1ZEfsRzkSEhS1l2id21V4vUDuZjXkOUwE09aJBccWOcM"))[-1,] %>%
+                select(1,
+                       "ZAS" = 3)
+    ) %>%
+    mutate(ZAS = case_when(ZAS == "Fora" ~ "FORA",
+                           TRUE ~ "dentro")) %>%
+    filter(GRUPO %in% grupo)
+
+  assign("controle_nf_diagramacao", controle_nf_diagramacao, envir = .GlobalEnv)
+
+}
+
+criacao_de_pastas <- function(data_entrega){
+
+  pasta_geral <-as_id("1bpm4WFJkkkoLEYd1oVRUfKx4SEMAaE0K")
+
+  verificar_existencia <- pasta_geral %>%
+    drive_ls(pattern = as.character(data_entrega))
+
+  if(verificar_existencia %>%
+     nrow() != 0){
+    pasta_data_da_entrega <- verificar_existencia
+
+    pasta_documentos<- pasta_data_da_entrega %>%
+      drive_ls(pattern = "Documentos dos NFs")
+
+    pasta_devolutivas <-pasta_data_da_entrega %>%
+      drive_ls(pattern = "Devolutivas")
+
+    pasta_cadernos <-pasta_data_da_entrega %>%
+      drive_ls(pattern = "Cadernos")
+
+  }else{
+
+    pasta_data_da_entrega <- drive_mkdir(paste0(data_entrega),pasta_geral)
+
+    pasta_documentos<-drive_mkdir(paste0("Documentos dos NFs"), pasta_data_da_entrega)
+
+    pasta_devolutivas <-drive_mkdir(paste0("Devolutivas"), pasta_data_da_entrega)
+
+    pasta_cadernos <- drive_mkdir(paste0("Cadernos"), pasta_data_da_entrega)
+
+  }
+
+  assign("pasta_documentos", pasta_documentos, envir = .GlobalEnv)
+  assign("pasta_devolutivas", pasta_devolutivas, envir = .GlobalEnv)
+  assign("pasta_cadernos", pasta_cadernos, envir = .GlobalEnv)
+
+}
+
+
+criacao_pastas_dentro_documentos <- function(data_entrega){
+  criacao_de_pastas(data_entrega)
+
+  for(linha in 1:(controle_nf_diagramacao %>% nrow())){
+
+
+
+
+    nucleo <- controle_nf_diagramacao[linha,]
+
+    verificar_existencia <- pasta_documentos %>%
+      drive_ls(pattern = as.character(nucleo$NF))
+
+    if(verificar_existencia %>%
+       nrow() != 0){
+      return()
+    }
+
+    pasta_documentos_interno<-drive_mkdir(paste0("Documentos dos NFs - ",nucleo$NF ), as_id(pasta_documentos))
+    drive_share(file = as_id(pasta_documentos_interno) , role = "fileOrganizer", type = "user",emailAddress = nucleo$`ADVOGADO RESPONSÁVEL`)
+
+
+  }
+}
+
+criacao_pastas_dentro_devoltuvivdas <- function(data_entrega, email_AMB){
+
+  criacao_de_pastas(data_entrega)
+
+
+  for(linha in 1:(controle_nf_diagramacao %>% nrow())){
+
+    nucleo <- controle_nf_diagramacao[linha,]
+
+    verificar_existencia <- pasta_devolutivas %>%
+      drive_ls(pattern = as.character(nucleo$NF))
+
+    if(verificar_existencia %>%
+       nrow() != 0){
+      return()
+    }
+
+    pasta_devolutiva_interno<-drive_mkdir(paste0("Devolutivas - ",nucleo$NF ), as_id(pasta_devolutivas))
+
+    drive_share(file = as_id(pasta_devolutiva_interno) , role = "writer", type = "user",emailAddress = email_AMB)
+
+
+  }
+}
+
+criacao_atalhos <- function(data_entrega){
+  criacao_de_pastas(data_entrega)
+
+  for(linha in 1:(controle_nf_diagramacao %>% nrow())){
+
+    nucleo <- controle_nf_diagramacao[linha,]
+
+
+    caderno <- drive_ls(path = as_id("18z97Lk4fgcmdcORSBTKSa-eWdISlTOkW"))
+
+    local_pasta <- caderno %>%
+      filter(str_detect(name, nucleo$ZAS))
+    if(local_pasta %>% nrow() == 0){
+      local_pasta <- caderno %>%
+        filter(!str_detect(name, nucleo$ZAS))
+
+    }
+
+
+    pasta_nf <- local_pasta %>%
+      drive_ls(pattern = nucleo$NF %>%
+                 unlist())
+
+
+    shortcut_create(file = pasta_nf, path = as_id(pasta_cadernos))
+
+  }
+
+}
+
+entrega_para_amb <- function(data_entrega, NF, GRUPO, email_AMB){
+
+  entrega_controle_nf_diagramacao(NF, GRUPO)#escolha de quais nfs será a entrega
+  criacao_pastas_dentro_devoltuvivdas(data_entrega)#criação das pastas de devolutivas por NF
+  criacao_pastas_dentro_documentos(data_entrega)#criação das pastas de documentos por NF
+  criacao_atalhos(data_entrega)#criação de atalhos dos cadernos
+}
+entrega_para_amb(Sys.Date(), "NF5", c("G1", "G2"))
+
