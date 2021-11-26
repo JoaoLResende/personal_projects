@@ -6,7 +6,7 @@ raiz_quadrada <- function(valor_inicial,numero) {
   valor_inicial^(2)-numero
 }
 
-aproximacao <- c()
+aproximacao <- c()a
 
 
 derivada_raiz_quadrada <- function(valor_inicial){
