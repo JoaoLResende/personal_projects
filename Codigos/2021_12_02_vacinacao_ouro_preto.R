@@ -3,27 +3,34 @@ require(googledrive)
 require(googlesheets4)
 require(basedosdados)
 require(scales)
-library(ggfx)
-library(gridExtra)
-library(grid)
+require(ggfx)
+require(gridExtra)
+require(grid)
 
+#Função para encontrar o que não esta presente
 '%ni%'  <- Negate('%in%')
 
 
-
+#query pada download dos dados (vacinação), em caso de reprodução,rodar set_billing_id(), com o código do projeto bigquerry
 query_vacinacao <- ("SELECT  idade_paciente, sexo_paciente, dose_vacina, COUNT(dose_vacina) AS TOTAL
 FROM `basedosdados.br_ms_vacinacao_covid19.microdados`
 WHERE id_municipio_estabelecimento = '3146107'
 GROUP BY sexo_paciente, idade_paciente, dose_vacina	")
+
+
+#query pada download dos dados (população), em caso de reprodução,rodar set_billing_id(), com o código do projeto bigquerry
 
 query_populacao <- "SELECT *
 FROM basedosdados-staging.br_ms_populacao_staging.municipio
 WHERE id_municipio = '3146107'
 and ano = 2020"
 
+#Download dos dados de vacinação e população
 vacinacao_op <- read_sql(query_vacinacao)
 populacao_op <- read_sql(query_populacao) %>% select(-c(id_municipio, ano))
 
+
+#Tratando os dados da vacinação e juntando com os dados da população da cidade
 vacinacao_op_tratado <- vacinacao_op %>%
   mutate(dose_vacina = case_when(dose_vacina %in% c("Dose Adicional", "Reforço") ~ "Dose Adicional",
                                  TRUE ~ dose_vacina)) %>%
@@ -61,7 +68,7 @@ vacinacao_op_tratado <- vacinacao_op %>%
   mutate(TOTAL = case_when(TOTAL < 0 ~ 0,
                            TRUE ~ TOTAL))
 
-
+#Gráfico da vacinação por sexo e faixa etária, junto com a população. O gráfico mostra a proporção por faixa etária da vacinação
 plot_vacina_op_faixa_etaria <- vacinacao_op_tratado %>%
   filter(identificador %in% c( "nao_imunizada_2_doses", "2ª Dose")) %>%
   filter(grupo_idade %ni% c("0-4 anos", "5-9 anos")) %>%
