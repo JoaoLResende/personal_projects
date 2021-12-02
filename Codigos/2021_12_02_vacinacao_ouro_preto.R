@@ -78,7 +78,8 @@ plot_vacina_op_faixa_etaria <- vacinacao_op_tratado %>%
   ggplot(aes(grupo_idade, TOTAL, fill = sexo, alpha =identificador ))+
   geom_col()+
   coord_flip()+
-  scale_alpha_manual(values=c(0.6,1))+
+  scale_fill_manual(values = c("#B1DCE3", "#047BAE"), labels= c("Feminimo", "Masculino"))+
+  scale_alpha_manual(values=c(0.6,1),guide = 'none')+
   scale_y_continuous(breaks=seq(-3500, 3500, 500), labels=abs(seq(-3500,3500,by=500)))+
   labs( title = "Vacinação por faixa etária em Ouro Preto - Minas Gerais",
         subtitle = "Cor escura imunizados com 2 doses",
@@ -88,6 +89,8 @@ plot_vacina_op_faixa_etaria <- vacinacao_op_tratado %>%
         alpha = "")+
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
         panel.background = element_blank())
+
+
 
 grid.arrange(plot_vacina_op_faixa_etaria + labs(caption="Fontes: DataSUS e IBGE"),
              bottom = textGrob("Autor:João Lúcio Resende", x = 1,
