@@ -92,7 +92,7 @@ plot_vacina_op_faixa_etaria <- vacinacao_op_tratado %>%
 
 
 
-grid.arrange(plot_vacina_op_faixa_etaria + labs(caption="Fontes: DataSUS e IBGE"),
+grid.arrange(plot_vacina_op_faixa_etaria + labs(caption="Fontes: basedosdados.org"),
              bottom = textGrob("Autor:João Lúcio Resende", x = 1,
                                hjust = 1, gp = gpar(fontface = 3L, fontsize = 9)))
 
