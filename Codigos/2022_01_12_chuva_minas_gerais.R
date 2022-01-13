@@ -49,7 +49,7 @@ historico_chuva_ano <- chuva_regiao %>%
        y = "Precipitação (mm)",
        color = "Região")+
   scale_x_date(breaks=date_breaks("12 months"),
-               date_labels = "%b %Y")+
+               date_labels = "%Y")+
   theme_fivethirtyeight()+
   theme(axis.text.x = element_text(angle = 45, hjust=1))
 
