@@ -97,3 +97,4 @@ polaridade_bbb <- todos_os_bbb %>%
 
 ggsave(paste0(Sys.Date(), sep = "_", "polaridade_bbb.jpeg"),polaridade_bbb, device = "jpeg",path =file.path(getwd(), "BBB"))
 
+write.csv(x = todos_os_bbb, file = paste0(Sys.Date(), sep = "_", "dados_bbb.csv"))
